@@ -1,13 +1,13 @@
-# Contributing to Word Unlocker
+﻿# Contributing to Doc Unlocker
 
-Thanks for your interest in improving Word Unlocker. This is a friendly,
+Thanks for your interest in improving Doc Unlocker. This is a friendly,
 community-run project and contributions of all sizes are welcome - code, docs,
 translations, bug reports, and ideas.
 
 ## Ground rules
 
 - Be kind and respectful.
-- Word Unlocker is strictly a **password-recovery tool for files you own or are
+- Doc Unlocker is strictly a **password-recovery tool for files you own or are
   authorised to access**. Please do not file issues or PRs that facilitate
   unauthorised access to other people's data.
 
@@ -26,17 +26,17 @@ If you can help, please open an issue describing your plan first.
 ## Development setup
 
 ```bash
-git clone https://github.com/Fallax-Vision/word_unlocker.git
-cd word_unlocker
+git clone https://github.com/Fallax-Vision/doc_unlocker.git
+cd doc_unlocker
 py -m pip install -r requirements.txt
-py word_unlocker.py
+py doc_unlocker.py
 ```
 
-The whole app lives in a single file: **`word_unlocker.py`**.
+The whole app lives in a single file: **`doc_unlocker.py`**.
 
 ### Project layout
 
-- `word_unlocker.py` - the app (logic + GUI)
+- `doc_unlocker.py` - the app (logic + GUI)
 - `build_exe.py` - PyInstaller build script
 - `assets/` - icon and `make_icon.py`
 - `.github/workflows/` - CI that builds and publishes the `.exe` on a version tag
@@ -45,7 +45,7 @@ The whole app lives in a single file: **`word_unlocker.py`**.
 
 ```bash
 py -m pip install --user pyinstaller
-py build_exe.py        # -> dist/WordUnlocker.exe
+py build_exe.py        # -> dist/DocUnlocker.exe
 ```
 
 ## Pull request workflow
@@ -60,7 +60,7 @@ py build_exe.py        # -> dist/WordUnlocker.exe
 
 We use [Semantic Versioning](https://semver.org/). To cut a release:
 
-1. Bump `__version__` in `word_unlocker.py` and add a `CHANGELOG.md` entry.
+1. Bump `__version__` in `doc_unlocker.py` and add a `CHANGELOG.md` entry.
 2. Tag it: `git tag vX.Y.Z && git push --tags`.
 3. CI (`.github/workflows/release.yml`) builds the Windows `.exe` and attaches
    it to the GitHub Release automatically.

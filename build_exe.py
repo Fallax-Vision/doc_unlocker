@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Build a standalone Windows .exe of Word Unlocker with PyInstaller.
+Build a standalone Windows .exe of Doc Unlocker with PyInstaller.
 
 Usage:
     py -m pip install --user pyinstaller
     py build_exe.py
 
-Result:  dist/WordUnlocker.exe   (git-ignored; ship as a Release asset)
+Result:  dist/DocUnlocker.exe   (git-ignored; ship as a Release asset)
 
 Size: the build excludes large libraries that aren't used and enables UPX
 compression when a `upx` executable is available (on PATH, or in tools/upx/).
@@ -42,7 +42,7 @@ def main():
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--onefile", "--windowed",
-        "--name", "WordUnlocker",
+        "--name", "DocUnlocker",
         "--noconfirm", "--clean",
     ]
     icon = os.path.join(HERE, "assets", "icon.ico")
@@ -59,11 +59,11 @@ def main():
     else:
         print("UPX not found - building without extra compression.")
         print("  (Optional: put upx.exe in tools/upx/ or on PATH to shrink the exe.)")
-    cmd.append(os.path.join(HERE, "word_unlocker.py"))
+    cmd.append(os.path.join(HERE, "doc_unlocker.py"))
 
     print("Running:", " ".join(cmd))
     subprocess.check_call(cmd, cwd=HERE)
-    out = os.path.join(HERE, "dist", "WordUnlocker.exe")
+    out = os.path.join(HERE, "dist", "DocUnlocker.exe")
     if os.path.isfile(out):
         print(f"\nDone -> {out}  ({os.path.getsize(out)/1048576:.1f} MB)")
 

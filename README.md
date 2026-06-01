@@ -1,8 +1,8 @@
-<div align="center">
+﻿<div align="center">
 
-<img src="assets/icon.png" width="96" alt="Word Unlocker icon">
+<img src="assets/icon.png" width="96" alt="Doc Unlocker icon">
 
-# Word Unlocker
+# Doc Unlocker
 
 **Recover the password of a Microsoft Office document _you own_ - with a friendly GUI, smart guessing, and optional GPU acceleration.**
 
@@ -17,7 +17,7 @@
 
 ## Use it responsibly
 
-Word Unlocker is a **password-recovery** tool for documents **you own or are
+Doc Unlocker is a **password-recovery** tool for documents **you own or are
 explicitly authorised to access** - for example, a file whose password you
 forgot. **Do not** use it on documents you have no right to open. You are
 responsible for how you use this software. See the [MIT License](LICENSE).
@@ -44,7 +44,7 @@ It works on two levels.
 ### B. GPU acceleration (via [Hashcat](https://hashcat.net))
 
 For modern Office encryption (AES-256 / SHA-512 / 100,000 iterations, Hashcat
-mode `-m 9600`), the CPU is slow by design. Word Unlocker can hand the work to
+mode `-m 9600`), the CPU is slow by design. Doc Unlocker can hand the work to
 your GPU:
 
 | Button | What it does |
@@ -79,16 +79,16 @@ both light and dark themes.
 ### Option A - Download the ready-made `.exe` (easiest, Windows)
 
 1. Go to the [Releases](../../releases) page.
-2. Download `WordUnlocker.exe` from the latest release.
+2. Download `DocUnlocker.exe` from the latest release.
 3. Double-click it. (No Python needed.)
 
 ### Option B - Run from source (Windows)
 
 ```bash
-git clone https://github.com/Fallax-Vision/word_unlocker.git
-cd word_unlocker
+git clone https://github.com/Fallax-Vision/doc_unlocker.git
+cd doc_unlocker
 py -m pip install -r requirements.txt
-py word_unlocker.py
+py doc_unlocker.py
 ```
 
 On first launch the app will offer to install its two small dependencies
@@ -107,7 +107,7 @@ On first launch the app will offer to install its two small dependencies
 3. Click **Start Unlocking** for the CPU attack, or
    **Get Hashcat** then **Test GPU** then **Run Hashcat now** for the fast GPU path.
 4. When the password is found, an **`Unlocked_<yourfile>`** copy appears in the
-   same folder, and the password is written to `WordUnlocker_found.log`.
+   same folder, and the password is written to `DocUnlocker_found.log`.
 
 ---
 
@@ -127,7 +127,7 @@ On first launch the app will offer to install its two small dependencies
 ```bash
 py -m pip install --user pyinstaller
 py build_exe.py
-# -> dist/WordUnlocker.exe
+# -> dist/DocUnlocker.exe
 ```
 
 The `.exe` is intentionally **git-ignored**; it is distributed as a

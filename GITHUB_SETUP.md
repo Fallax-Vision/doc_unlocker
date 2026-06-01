@@ -1,135 +1,100 @@
-# Publishing this repo to GitHub (Fallax-Vision)
+# GitHub: renaming the repo and automatic releases
 
-The local repository is fully prepared: git is initialised, the first commit is
-made, the `.exe` is built in `dist/`, and the tag **`v1.0.0`** is created.
-
-Pick **one** of the three paths below: GitHub Desktop (easiest, you already
-have it), the GitHub CLI, or the website. Releases are produced **automatically**
-by the CI workflow when you push a version tag - so you usually never upload the
-`.exe` by hand.
+This repository was first pushed to GitHub as **`Fallax-Vision/word_unlocker`**.
+The project has been renamed to **Doc Unlocker** (`doc_unlocker`). This guide
+shows how to (1) rename the existing GitHub repo in place - no new repository -
+and (2) get a Release published automatically on every version bump.
 
 ---
 
-## Path 1 - GitHub Desktop (recommended for you)
+## Why the first release did not appear
 
-GitHub Desktop manages the local-to-origin connection and pushing. The release
-is then built and published **automatically by CI** when the `v1.0.0` tag
-arrives.
+The previous workflow only ran on a **pushed tag** (`v*`). GitHub Desktop pushed
+your branch but **not the tag**, so the workflow never triggered (0 runs).
 
-### A. Publish the repo to the Fallax-Vision org
+This has been fixed: the workflow now also runs on **every push to `main`**,
+reads `__version__` from `doc_unlocker.py`, and **publishes a Release only if one
+does not already exist for that version**. So simply pushing a commit that bumps
+the version creates the release automatically - no manual tag required.
 
-1. Open **GitHub Desktop**.
+---
+
+## Part 1 - Rename the GitHub repo (in place, no new repo)
+
+1. Go to **https://github.com/Fallax-Vision/word_unlocker/settings**
+2. Under **General -> Repository name**, change `word_unlocker` to
+   **`doc_unlocker`** and click **Rename**.
+   - GitHub keeps all history, stars, issues, and **redirects the old URL**, so
+     nothing breaks. This is a rename, not a new repository.
+3. While in **Settings**, open **Actions -> General**, set **Workflow
+   permissions** to **Read and write permissions**, and **Save**. This lets the
+   workflow create Releases (without it the release step fails with a 403).
+
+> Do Part 1 **before** pushing: the local remote now points at the new
+> `doc_unlocker` URL, which only resolves after the rename.
+
+---
+
+## Part 2 - Point your local copy at the new name
+
+The local folder has been renamed to
+`C:\wamp64\www\fallax_projects\doc_unlocker`.
+
+### In GitHub Desktop
+1. If Desktop shows the old repo as "missing", click **Remove** it from the list.
 2. **File -> Add local repository...** and choose
-   `C:\wamp64\www\fallax_projects\word_unlocker`
-   (it is already a git repo, so it is added directly).
-3. Click **Publish repository** (top bar):
-   - **Organization / Owner:** select **Fallax-Vision**
-   - **Name:** `word_unlocker`
-   - **Uncheck** "Keep this code private" (so it is public / open-source)
-   - **Publish repository** - this creates the org repo and pushes `main`.
+   `C:\wamp64\www\fallax_projects\doc_unlocker`.
+3. Desktop will detect the existing remote. (If it still points at the old URL,
+   that's fine - GitHub redirects - but you can update it to be tidy: see below.)
 
-### B. Push the version tag (this triggers the release build)
-
-GitHub Desktop pushes your commits and the **`v1.0.0`** tag. If the tag does not
-appear on GitHub, click **Push origin** again (Repository -> Push).
-When the tag lands, the **Actions** workflow builds the `.exe` and publishes the
-Release automatically - watch the repo's **Actions** tab. No manual upload.
-
-### C. Day-to-day
-
-- Edit files, review changes in GitHub Desktop, write a summary,
-  **Commit to main**, then **Push origin**.
-- New version: bump `__version__` in `word_unlocker.py`, add a `CHANGELOG.md`
-  entry, **Commit**, then **History -> right-click the commit -> Create Tag...**,
-  name it `vX.Y.Z`, then **Push origin**. CI publishes the new release with the
-  fresh `.exe`.
-
-> GitHub Desktop has no "create release" button - that is handled by CI
-> (automatic), or manually on the website (Releases -> Draft a new release, where
-> you can drag `dist/WordUnlocker.exe`).
+### Update the remote URL (optional but tidy)
+In a terminal in the repo folder:
+```powershell
+git remote set-url origin https://github.com/Fallax-Vision/doc_unlocker.git
+```
 
 ---
 
-## Path 2 - GitHub CLI (`gh`)
+## Part 3 - Push and get the automatic release
 
-The GitHub CLI (`gh`) has been installed on this machine. Open a **new**
-terminal (so `gh` is on PATH), `cd` into
-`C:\wamp64\www\fallax_projects\word_unlocker`, then:
+1. In **GitHub Desktop**, you should see a new commit
+   ("Rename to Doc Unlocker ..."). Click **Push origin**.
+2. Open **https://github.com/Fallax-Vision/doc_unlocker/actions** - the
+   **Build and Release** workflow will start automatically.
+3. When it finishes (a few minutes), a **Release `v1.0.0`** appears with
+   **`DocUnlocker.exe`** attached, under
+   **https://github.com/Fallax-Vision/doc_unlocker/releases**.
 
-```powershell
-# 1. Log in to GitHub (opens your browser once)
-gh auth login
-
-# 2. Create the repo UNDER the Fallax-Vision org and push code in one step
-gh repo create Fallax-Vision/word_unlocker --public --source=. --remote=origin --push ^
-   --description "Recover the password of your own Microsoft Office documents - GUI + GPU (Hashcat)."
-
-# 3. Push the version tag
-git push origin v1.0.0
-
-# 4. (If the .exe isn't built yet)
-py -m pip install --user pyinstaller
-py build_exe.py
-
-# 5. Create the v1.0.0 Release and attach the .exe
-gh release create v1.0.0 "dist/WordUnlocker.exe" ^
-   --repo Fallax-Vision/word_unlocker ^
-   --title "Word Unlocker v1.0.0" ^
-   --notes-file CHANGELOG.md
-```
-
-Done - your repo is live at
-`https://github.com/Fallax-Vision/word_unlocker` with a downloadable
-`WordUnlocker.exe` on the Releases page.
-
-> You must be a member/owner of the **Fallax-Vision** organisation with rights
-> to create repositories. If `gh auth login` does not list the org, ask an org
-> owner to grant access (or accept the org's SSO when prompted).
+That's it - no manual tagging or uploading.
 
 ---
 
-## Path 3 - GitHub website (manual)
+## How future releases work (automatic)
 
-### 1. Create the empty repo
+Whenever you want to ship a new version:
 
-1. Go to **https://github.com/organizations/Fallax-Vision/repositories/new**
-2. **Name:** `word_unlocker`  -  **Visibility:** Public
-3. **Do NOT** add a README, .gitignore, or license (we already have them).
-4. **Create repository.**
+1. Edit `doc_unlocker.py` and bump `__version__` (e.g. `1.0.0` -> `1.1.0`).
+2. Add a matching section to `CHANGELOG.md`.
+3. Commit and **Push origin** (GitHub Desktop or `git push`).
 
-### 2. Push the local repo
+The workflow sees the new version, builds the `.exe`, creates the tag
+`v1.1.0`, and publishes the Release with the binary attached. If the version is
+unchanged, ordinary pushes do **not** create duplicate releases.
 
-```powershell
-git remote add origin https://github.com/Fallax-Vision/word_unlocker.git
-git push -u origin main
-git push origin v1.0.0
-```
+> You can also trigger a build manually from the **Actions** tab
+> ("Build and Release" -> **Run workflow**).
 
-### 3. Build the .exe (if needed)
+---
 
+## Manual fallback (if you ever need it)
+
+Build locally and attach the binary by hand:
 ```powershell
 py -m pip install --user pyinstaller
-py build_exe.py        # -> dist/WordUnlocker.exe
+py build_exe.py                      # -> dist/DocUnlocker.exe
 ```
+Then on **Releases -> Draft a new release**, pick the tag, and drag in
+`dist/DocUnlocker.exe`.
 
-### 4. Create the Release and attach the .exe
-
-1. Open **https://github.com/Fallax-Vision/word_unlocker/releases/new**
-2. **Choose a tag:** `v1.0.0`
-3. **Title:** `Word Unlocker v1.0.0`
-4. **Description:** paste the `## [1.0.0]` section from `CHANGELOG.md`.
-5. Drag **`dist/WordUnlocker.exe`** into the "Attach binaries" box.
-6. **Publish release.**
-
----
-
-## Future releases
-
-```powershell
-# bump __version__ in word_unlocker.py + add a CHANGELOG entry, then:
-git add -A && git commit -m "Release vX.Y.Z"
-git tag vX.Y.Z
-git push && git push --tags
-py build_exe.py
-gh release create vX.Y.Z "dist/WordUnlocker.exe" --title "Word Unlocker vX.Y.Z" --notes-file CHANGELOG.md
-```
+Requirements: you must be a member/owner of the **Fallax-Vision** organisation
+with permission to manage its repositories.

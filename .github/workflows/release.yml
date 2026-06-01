@@ -1,45 +1,76 @@
 name: Build and Release
 
-# Builds the Windows .exe and publishes it to a GitHub Release whenever a
-# version tag (e.g. v1.0.0) is pushed.
+# Publishes a GitHub Release with the Windows .exe AUTOMATICALLY whenever the
+# version in doc_unlocker.py changes on main. It also runs on a pushed version
+# tag, or manually. A release is only created if one does not already exist for
+# the current __version__, so ordinary commits never create duplicate releases.
 
 on:
   push:
-    tags:
-      - "v*"
-  workflow_dispatch: {}   # allow manual runs from the Actions tab
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch: {}
 
 permissions:
   contents: write          # needed to create the Release and upload assets
 
 jobs:
-  build-windows:
+  release:
     runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Read version from doc_unlocker.py
+        id: ver
+        shell: bash
+        run: |
+          V=$(python -c "import re;print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('doc_unlocker.py', encoding='utf-8').read()).group(1))")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=v$V" >> "$GITHUB_OUTPUT"
+          echo "Detected version: $V"
+
+      - name: Check whether this release already exists
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.ver.outputs.version }}" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release v${{ steps.ver.outputs.version }} already exists - skipping."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Release v${{ steps.ver.outputs.version }} is new - will build and publish."
+          fi
+
       - name: Set up Python
+        if: steps.check.outputs.exists == 'false'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install dependencies
+        if: steps.check.outputs.exists == 'false'
         run: |
           python -m pip install --upgrade pip
           python -m pip install pyinstaller msoffcrypto-tool olefile
 
-      - name: Install UPX (for a smaller .exe)
+      - name: Install UPX (smaller .exe)
+        if: steps.check.outputs.exists == 'false'
         run: choco install upx -y
 
       - name: Build the .exe
+        if: steps.check.outputs.exists == 'false'
         run: python build_exe.py
 
       - name: Publish Release with the .exe
+        if: steps.check.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          name: Word Unlocker ${{ github.ref_name }}
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Doc Unlocker ${{ steps.ver.outputs.tag }}
           body_path: CHANGELOG.md
           draft: false
           prerelease: false
-          files: dist/WordUnlocker.exe
+          files: dist/DocUnlocker.exe

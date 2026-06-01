@@ -1,4 +1,4 @@
-# ---- Python ----
+﻿# ---- Python ----
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -24,7 +24,7 @@ tools/
 *.tested.txt
 *.smart_wordlist.txt
 run_hashcat.bat
-WordUnlocker_found.log
+DocUnlocker_found.log
 Unlocked_*
 Unlocked - *
 

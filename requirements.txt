@@ -1,0 +1,10 @@
+# Runtime dependencies (the app also auto-installs these on first launch)
+msoffcrypto-tool>=5.0
+olefile>=0.46
+
+# Optional: only needed as a fallback to unpack Hashcat's .7z on systems
+# without the built-in Windows 'tar' (libarchive) or 7-Zip. Safe to skip.
+# py7zr>=0.20
+
+# Build-time only (to produce the standalone .exe):
+# pyinstaller>=6.0

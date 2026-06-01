@@ -1,0 +1,39 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+*.spec
+
+# ---- PyInstaller output (the .exe is shipped as a Release asset, NOT committed) ----
+dist/
+*.exe
+
+# ---- Bundled / downloaded Hashcat (users download it themselves) ----
+hashcat*/
+*.7z
+
+# ---- Local build tools (e.g. UPX) - not committed ----
+tools/
+
+# ---- Runtime artefacts produced while cracking ----
+*.hash
+*.pot
+*.cracked.txt
+*.tested.txt
+*.smart_wordlist.txt
+run_hashcat.bat
+WordUnlocker_found.log
+Unlocked_*
+Unlocked - *
+
+# ---- Local / editor ----
+_smoke.py
+.venv/
+venv/
+.vscode/
+.idea/
+*.log
+.DS_Store
+Thumbs.db

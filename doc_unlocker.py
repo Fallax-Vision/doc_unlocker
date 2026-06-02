@@ -708,10 +708,7 @@ class App:
         root.title(f"{__app_name__} - Password Recovery  v{__version__}")
         root.geometry("960x660")
         root.minsize(880, 620)
-        try:
-            root.iconbitmap(resource_path("assets", "icon.ico"))
-        except Exception:
-            pass
+        self._set_window_icon(root)
 
         self.style = ttk.Style()
         try:
@@ -726,6 +723,28 @@ class App:
     def _reg(self, widget, role):
         self._widgets.append((widget, role))
         return widget
+
+    def _set_window_icon(self, root):
+        """
+        Set the window/taskbar icon. On Windows the taskbar uses the .ico via
+        iconbitmap(default=...) once an explicit AppUserModelID is set (done in
+        main() before the window is created). A .png is used as a cross-platform
+        fallback. A reference to the PhotoImage is kept so it is not GC'd.
+        """
+        ico = resource_path("assets", "icon.ico")
+        if os.path.isfile(ico):
+            try:
+                # default=... applies to this window and every future toplevel.
+                root.iconbitmap(default=ico)
+            except Exception:
+                pass
+        png = resource_path("assets", "icon.png")
+        if os.path.isfile(png):
+            try:
+                self._icon_img = tk.PhotoImage(file=png)
+                root.iconphoto(True, self._icon_img)
+            except Exception:
+                pass
 
     # ---- UI construction ---------------------------------------------
     def _build_ui(self):
@@ -1590,7 +1609,23 @@ class App:
             self.finish()
 
 
+def _set_app_user_model_id():
+    """
+    Give the process an explicit AppUserModelID so Windows shows OUR window
+    icon in the taskbar (instead of grouping the app under the generic
+    python/Tk icon). Must be called before the first window is created.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "FallaxVision.DocUnlocker")
+        except Exception:
+            pass
+
+
 def main():
+    _set_app_user_model_id()
     root = tk.Tk()
     App(root)
     root.mainloop()

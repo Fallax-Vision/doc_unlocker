@@ -45,11 +45,14 @@ def main():
         "--name", "DocUnlocker",
         "--noconfirm", "--clean",
     ]
+    sep = ";" if os.name == "nt" else ":"
     icon = os.path.join(HERE, "assets", "icon.ico")
     if os.path.isfile(icon):
         cmd += ["--icon", icon]
-        sep = ";" if os.name == "nt" else ":"
         cmd += ["--add-data", f"{icon}{sep}assets"]
+    icon_png = os.path.join(HERE, "assets", "icon.png")
+    if os.path.isfile(icon_png):
+        cmd += ["--add-data", f"{icon_png}{sep}assets"]
     for mod in EXCLUDES:
         cmd += ["--exclude-module", mod]
     upx_dir = find_upx_dir()

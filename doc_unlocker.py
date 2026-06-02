@@ -26,6 +26,7 @@ import io
 import os
 import sys
 import glob
+import json
 import time
 import queue
 import base64
@@ -34,6 +35,7 @@ import threading
 import itertools
 import subprocess
 import datetime
+import webbrowser
 import urllib.request
 import xml.etree.ElementTree as ET
 import tkinter as tk
@@ -41,7 +43,7 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 
 
 # ---------------------------------------------------------------------------
-# Dependency bootstrap: install + import the two libraries we rely on.
+# Dependency bootstrap: install + import the libraries we rely on.
 # ---------------------------------------------------------------------------
 def _pip_install(package):
     subprocess.check_call(
@@ -63,6 +65,10 @@ def ensure_dependencies():
         import pypdf  # noqa: F401  (PDF support)
     except ImportError:
         missing.append("pypdf")
+    try:
+        import customtkinter  # noqa: F401  (modern UI)
+    except ImportError:
+        missing.append("customtkinter")
     if not missing:
         return True
 
@@ -80,9 +86,10 @@ def ensure_dependencies():
     try:
         for pkg in missing:
             _pip_install(pkg)
-        import msoffcrypto  # noqa: F401
-        import olefile      # noqa: F401
-        import pypdf        # noqa: F401
+        import msoffcrypto    # noqa: F401
+        import olefile        # noqa: F401
+        import pypdf          # noqa: F401
+        import customtkinter  # noqa: F401
         return True
     except Exception as exc:  # pragma: no cover
         r = tk.Tk()
@@ -91,7 +98,8 @@ def ensure_dependencies():
             "Setup failed",
             "Could not install the dependencies automatically.\n\n"
             "Open a terminal and run:\n\n"
-            f'    "{sys.executable}" -m pip install msoffcrypto-tool olefile pypdf\n\n'
+            f'    "{sys.executable}" -m pip install msoffcrypto-tool olefile '
+            "pypdf customtkinter\n\n"
             f"Details: {exc}",
         )
         r.destroy()
@@ -104,6 +112,7 @@ if not ensure_dependencies():
 import olefile
 import msoffcrypto
 import pypdf
+import customtkinter as ctk
 
 
 # ===========================================================================
@@ -649,46 +658,50 @@ def format_duration(seconds):
 
 
 # ===========================================================================
-#  THEMING
+#  SETTINGS
 # ===========================================================================
-THEMES = {
-    "light": {
-        "bg": "#eef1f7", "card": "#ffffff", "card_border": "#e2e6ef",
-        "text": "#1f2430", "muted": "#6b7280", "title": "#111827",
-        "entry_bg": "#f4f6fb", "entry_fg": "#1f2430", "entry_border": "#d7dce8",
-        "accent": "#2f6df6", "accent_fg": "#ffffff",
-        "purple": "#7c3aed", "purple_fg": "#ffffff",
-        "ghost_bg": "#ffffff", "ghost_fg": "#1f2430", "ghost_border": "#dfe3ec",
-        "track": "#e5e9f2", "bar": "#2f6df6",
-    },
-    "dark": {
-        "bg": "#0b0f17", "card": "#121826", "card_border": "#1f2937",
-        "text": "#e6edf3", "muted": "#9aa4b2", "title": "#f3f6fb",
-        "entry_bg": "#0e1422", "entry_fg": "#e6edf3", "entry_border": "#283143",
-        "accent": "#3b82f6", "accent_fg": "#ffffff",
-        "purple": "#8b5cf6", "purple_fg": "#ffffff",
-        "ghost_bg": "#121826", "ghost_fg": "#e6edf3", "ghost_border": "#283143",
-        "track": "#1b2333", "bar": "#3b82f6",
-    },
+SETTINGS_PATH = os.path.join(os.path.expanduser("~"), ".doc_unlocker.json")
+
+DEFAULT_SETTINGS = {
+    "theme": "System",          # System / Light / Dark
+    "corners": "Rounded",       # Rounded / Sharp
+    "fullscreen": False,        # launch maximised
+    "notify_done": True,        # bring window forward when a run finishes
+    "sound_done": True,         # play a sound when a run finishes
+    "confirm_close": True,      # confirm quitting while a run is active
+    "auto_hashcat": False,      # auto-download Hashcat when needed
 }
 
 
-def system_theme():
-    """Return 'light' or 'dark' from the Windows app theme (default light)."""
+def load_settings():
+    s = dict(DEFAULT_SETTINGS)
     try:
-        import winreg
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
-        val, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
-        winreg.CloseKey(key)
-        return "light" if val == 1 else "dark"
+        with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+            s.update(json.load(f))
     except Exception:
-        return "light"
+        pass
+    return s
+
+
+def save_settings(s):
+    try:
+        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(s, f, indent=2)
+    except Exception:
+        pass
+
+
+# Accent colours as (light, dark) tuples for CustomTkinter.
+BLUE = ("#2f6df6", "#3b82f6")
+BLUE_HOVER = ("#2559d0", "#5a96f7")
+PURPLE = ("#7c3aed", "#8b5cf6")
+PURPLE_HOVER = ("#6b2fd0", "#a07cf0")
+GHOST_HOVER = ("#e9edf5", "#23304a")
+GHOST_BORDER = ("#dfe3ec", "#2b3650")
 
 
 # ===========================================================================
-#  GUI
+#  GUI  (CustomTkinter)
 # ===========================================================================
 class App:
     def __init__(self, root):
@@ -701,292 +714,410 @@ class App:
         self.hc_run_thread = None
         self.hc_proc = None
         self._pump_active = False
-        self.theme_mode = tk.StringVar(value="system")
-        self._widgets = []          # (widget, role) for re-theming
-        self._cards = []
+        self._ptotal = 1
+        self._round = []                 # widgets whose corner_radius can change
+        self.settings = load_settings()
+
+        ctk.set_appearance_mode(self.settings.get("theme", "System"))
+        ctk.set_default_color_theme("blue")
 
         root.title(f"{__app_name__} - Password Recovery  v{__version__}")
-        root.geometry("960x660")
-        root.minsize(880, 620)
+        self._center(960, 680)
+        root.minsize(900, 640)
+        root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._set_window_icon(root)
 
-        self.style = ttk.Style()
-        try:
-            self.style.theme_use("clam")
-        except tk.TclError:
-            pass
+        self.R = 14 if self.settings.get("corners") == "Rounded" else 0
+
+        self.doc_var = tk.StringVar()
+        self.wl_var = tk.StringVar()
+        self.digits_var = tk.StringVar(value="6")
+        self.mut_var = tk.BooleanVar(value=True)
+        self.dates_var = tk.BooleanVar(value=True)
+        self.two_var = tk.BooleanVar(value=False)
 
         self._build_ui()
-        self.apply_theme()
 
-    # ---- widget registration (for theming) ---------------------------
-    def _reg(self, widget, role):
-        self._widgets.append((widget, role))
-        return widget
+        if self.settings.get("fullscreen"):
+            self.root.after(60, lambda: self._safe_zoom())
+
+    # ---- small helpers ------------------------------------------------
+    def _center(self, w, h):
+        self.root.update_idletasks()
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        x = max(0, (sw - w) // 2)
+        y = max(0, (sh - h) // 3)
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _safe_zoom(self):
+        try:
+            self.root.state("zoomed")
+        except Exception:
+            try:
+                self.root.attributes("-zoomed", True)
+            except Exception:
+                pass
 
     def _set_window_icon(self, root):
-        """
-        Set the window/taskbar icon. On Windows the taskbar uses the .ico via
-        iconbitmap(default=...) once an explicit AppUserModelID is set (done in
-        main() before the window is created). A .png is used as a cross-platform
-        fallback. A reference to the PhotoImage is kept so it is not GC'd.
-        """
         ico = resource_path("assets", "icon.ico")
         if os.path.isfile(ico):
-            try:
-                # default=... applies to this window and every future toplevel.
-                root.iconbitmap(default=ico)
-            except Exception:
-                pass
-        png = resource_path("assets", "icon.png")
-        if os.path.isfile(png):
-            try:
-                self._icon_img = tk.PhotoImage(file=png)
-                root.iconphoto(True, self._icon_img)
-            except Exception:
-                pass
+            def _apply():
+                try:
+                    root.iconbitmap(ico)
+                except Exception:
+                    pass
+            _apply()
+            root.after(250, _apply)   # CTk sometimes needs a delayed re-apply
+
+    def _card(self, parent, **kw):
+        f = ctk.CTkFrame(parent, corner_radius=self.R, **kw)
+        self._round.append(f)
+        return f
+
+    def _section_title(self, parent, text):
+        return ctk.CTkLabel(parent, text=text, anchor="w",
+                            font=ctk.CTkFont(size=14, weight="bold"))
+
+    def _entry(self, parent, textvariable, placeholder=""):
+        e = ctk.CTkEntry(parent, textvariable=textvariable, corner_radius=self.R,
+                         height=38, placeholder_text=placeholder)
+        self._round.append(e)
+        return e
+
+    def _ghost_button(self, parent, text, command):
+        b = ctk.CTkButton(parent, text=text, command=command, corner_radius=self.R,
+                          height=40, anchor="w", fg_color="transparent",
+                          border_width=1, border_color=GHOST_BORDER,
+                          text_color=("gray15", "gray90"), hover_color=GHOST_HOVER)
+        self._round.append(b)
+        return b
 
     # ---- UI construction ---------------------------------------------
     def _build_ui(self):
-        self.outer = tk.Frame(self.root)
-        self.outer.pack(fill="both", expand=True)
-        self._reg(self.outer, "bg")
+        container = ctk.CTkFrame(self.root, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=16, pady=12)
 
-        # Header ---------------------------------------------------------
-        header = tk.Frame(self.outer)
-        header.pack(fill="x", padx=18, pady=(14, 6))
-        self._reg(header, "bg")
-        self.title_lbl = tk.Label(header, text=f"🔑  {__app_name__}",
-                                  font=("Segoe UI Semibold", 16))
-        self.title_lbl.pack(side="left")
-        self._reg(self.title_lbl, "title")
-        self.sub_lbl = tk.Label(header, text=f"Password Recovery  ·  v{__version__}",
-                                font=("Segoe UI", 10))
-        self.sub_lbl.pack(side="left", padx=(10, 0), pady=(4, 0))
-        self._reg(self.sub_lbl, "muted")
+        # Header (transparent -> same background as the body, also in dark mode)
+        header = ctk.CTkFrame(container, fg_color="transparent")
+        header.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(header, text=f"\U0001F511  {__app_name__}",
+                     font=ctk.CTkFont(size=20, weight="bold")).pack(side="left")
+        ctk.CTkLabel(header, text=f"  Password Recovery  ·  v{__version__}",
+                     text_color=("gray45", "gray60"),
+                     font=ctk.CTkFont(size=12)).pack(side="left", pady=(6, 0))
+        self.settings_btn = ctk.CTkButton(
+            header, text="⚙  Settings", width=110, height=34,
+            corner_radius=self.R, command=self.open_settings,
+            fg_color="transparent", border_width=1, border_color=GHOST_BORDER,
+            text_color=("gray15", "gray90"), hover_color=GHOST_HOVER)
+        self.settings_btn.pack(side="right")
+        self._round.append(self.settings_btn)
 
-        theme_box = tk.Frame(header)
-        theme_box.pack(side="right")
-        self._reg(theme_box, "bg")
-        tl = tk.Label(theme_box, text="Theme:", font=("Segoe UI", 10))
-        tl.pack(side="left", padx=(0, 6))
-        self._reg(tl, "muted")
-        self.theme_menu = ttk.Combobox(
-            theme_box, width=9, state="readonly", textvariable=self.theme_mode,
-            values=["system", "light", "dark"])
-        self.theme_menu.pack(side="left")
-        self.theme_menu.bind("<<ComboboxSelected>>", lambda e: self.apply_theme())
+        # Body: left column (inputs/options/actions) + right column (utilities)
+        body = ctk.CTkFrame(container, fg_color="transparent")
+        body.pack(fill="both", expand=True)
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_columnconfigure(1, weight=0)
+        body.grid_rowconfigure(0, weight=1)
 
-        # Body: left main column + right utilities column ---------------
-        body = tk.Frame(self.outer)
-        body.pack(fill="both", expand=True, padx=18, pady=6)
-        self._reg(body, "bg")
-
-        left = tk.Frame(body)
-        left.pack(side="left", fill="both", expand=True)
-        self._reg(left, "bg")
-
-        right = tk.Frame(body)
-        right.pack(side="right", fill="y", padx=(14, 0))
-        self._reg(right, "bg")
+        left = ctk.CTkFrame(body, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="nsew")
+        right = ctk.CTkFrame(body, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="ns", padx=(14, 0))
 
         self._build_inputs_card(left)
         self._build_options_card(left)
         self._build_action_card(left)
         self._build_utilities_card(right)
-        self._build_status_card(self.outer)
-
-    def _card(self, parent, title=None, icon=""):
-        card = tk.Frame(parent, highlightthickness=1, bd=0)
-        self._reg(card, "card")
-        self._cards.append(card)
-        if title:
-            head = tk.Label(card, text=f"{icon}  {title}".strip(),
-                            font=("Segoe UI Semibold", 11), anchor="w")
-            head.pack(fill="x", padx=16, pady=(12, 2))
-            self._reg(head, "title")
-        return card
-
-    def _entry(self, parent):
-        e = tk.Entry(parent, font=("Segoe UI", 10), relief="flat",
-                     highlightthickness=1, insertwidth=1)
-        self._reg(e, "entry")
-        return e
-
-    def _ghost_button(self, parent, text, command, icon=""):
-        b = tk.Button(parent, text=f"{icon}  {text}".strip(), command=command,
-                      font=("Segoe UI", 10), relief="flat", bd=0, cursor="hand2",
-                      anchor="w", padx=14, pady=9)
-        self._reg(b, "ghost")
-        return b
+        self._build_status_card(container)
 
     def _build_inputs_card(self, parent):
         card = self._card(parent)
         card.pack(fill="x", pady=(0, 12))
+        pad = {"padx": 18}
 
-        lbl = tk.Label(card, text="Locked document (full path)",
-                       font=("Segoe UI", 10), anchor="w")
-        lbl.pack(fill="x", padx=16, pady=(14, 4)); self._reg(lbl, "text")
-        row = tk.Frame(card); row.pack(fill="x", padx=16); self._reg(row, "card")
-        self.doc_var = tk.StringVar()
-        e = self._entry(row); e.config(textvariable=self.doc_var)
-        e.pack(side="left", fill="x", expand=True, ipady=6)
-        self._ghost_button(row, "Browse", self.pick_doc, "📁").pack(
-            side="left", padx=(8, 0))
+        ctk.CTkLabel(card, text="Locked document (full path)", anchor="w").pack(
+            fill="x", pady=(16, 4), **pad)
+        row = ctk.CTkFrame(card, fg_color="transparent")
+        row.pack(fill="x", **pad)
+        self._entry(row, self.doc_var, "Select a locked Word / Excel / "
+                    "PowerPoint / PDF document...").pack(
+            side="left", fill="x", expand=True)
+        b = ctk.CTkButton(row, text="\U0001F4C1  Browse", width=110, height=38,
+                          corner_radius=self.R, command=self.pick_doc,
+                          fg_color="transparent", border_width=1,
+                          border_color=GHOST_BORDER, text_color=("gray15", "gray90"),
+                          hover_color=GHOST_HOVER)
+        b.pack(side="left", padx=(8, 0))
+        self._round.append(b)
 
-        lbl2 = tk.Label(card, text="Wordlist (optional - leave empty for built-in)",
-                        font=("Segoe UI", 10), anchor="w")
-        lbl2.pack(fill="x", padx=16, pady=(12, 4)); self._reg(lbl2, "text")
-        row2 = tk.Frame(card); row2.pack(fill="x", padx=16); self._reg(row2, "card")
-        self.wl_var = tk.StringVar()
-        e2 = self._entry(row2); e2.config(textvariable=self.wl_var)
-        e2.pack(side="left", fill="x", expand=True, ipady=6)
-        self._ghost_button(row2, "Browse", self.pick_wl, "📁").pack(
-            side="left", padx=(8, 0))
+        ctk.CTkLabel(card, text="Wordlist (optional - leave empty for built-in)",
+                     anchor="w").pack(fill="x", pady=(12, 4), **pad)
+        row2 = ctk.CTkFrame(card, fg_color="transparent")
+        row2.pack(fill="x", **pad)
+        self._entry(row2, self.wl_var, "Select wordlist file (optional)...").pack(
+            side="left", fill="x", expand=True)
+        b2 = ctk.CTkButton(row2, text="\U0001F4C1  Browse", width=110, height=38,
+                           corner_radius=self.R, command=self.pick_wl,
+                           fg_color="transparent", border_width=1,
+                           border_color=GHOST_BORDER, text_color=("gray15", "gray90"),
+                           hover_color=GHOST_HOVER)
+        b2.pack(side="left", padx=(8, 0))
+        self._round.append(b2)
 
-        row3 = tk.Frame(card); row3.pack(fill="x", padx=16, pady=(12, 16))
-        self._reg(row3, "card")
-        l3 = tk.Label(row3, text="If no wordlist, try PINs up to this many digits:",
-                      font=("Segoe UI", 10))
-        l3.pack(side="left"); self._reg(l3, "text")
-        self.digits_var = tk.IntVar(value=6)
-        ttk.Spinbox(row3, from_=1, to=12, width=5,
-                    textvariable=self.digits_var).pack(side="left", padx=8)
+        row3 = ctk.CTkFrame(card, fg_color="transparent")
+        row3.pack(fill="x", pady=(14, 16), **pad)
+        ctk.CTkLabel(row3, text="If no wordlist, try PINs up to this many digits:"
+                     ).pack(side="left")
+        self.digits_menu = ctk.CTkOptionMenu(
+            row3, width=72, corner_radius=self.R, variable=self.digits_var,
+            values=[str(i) for i in range(1, 13)])
+        self.digits_menu.pack(side="left", padx=10)
+        self._round.append(self.digits_menu)
 
     def _build_options_card(self, parent):
-        card = self._card(parent, "Options", "⚙")
+        card = self._card(parent)
         card.pack(fill="x", pady=(0, 12))
-        self.mut_var = tk.BooleanVar(value=True)
-        self.dates_var = tk.BooleanVar(value=True)
-        self.two_var = tk.BooleanVar(value=False)
+        self._section_title(card, "⚙  Options").pack(
+            fill="x", padx=18, pady=(14, 4))
         for var, text in [
             (self.mut_var, "Variants (caps, numbers, years, symbols, leet)"),
             (self.dates_var, f"Word + date patterns ({DATE_YEAR_START}-{DATE_YEAR_END})"),
             (self.two_var, "Two-word combinations (large - slower)"),
         ]:
-            cb = tk.Checkbutton(card, text=text, variable=var,
-                                font=("Segoe UI", 10), anchor="w",
-                                relief="flat", bd=0, highlightthickness=0,
-                                cursor="hand2")
-            cb.pack(fill="x", padx=16, pady=2)
-            self._reg(cb, "check")
-        tk.Frame(card, height=8).pack()
+            ctk.CTkCheckBox(card, text=text, variable=var,
+                            corner_radius=6).pack(fill="x", padx=20, pady=6)
+        ctk.CTkLabel(card, text="").pack(pady=2)
 
     def _build_action_card(self, parent):
         card = self._card(parent)
         card.pack(fill="x")
-        row = tk.Frame(card); row.pack(fill="x", padx=16, pady=16)
-        self._reg(row, "card")
-        self.start_btn = tk.Button(row, text="▶  Start Unlocking",
-                                   command=self.start, font=("Segoe UI Semibold", 11),
-                                   relief="flat", bd=0, cursor="hand2", padx=18, pady=11)
+        row = ctk.CTkFrame(card, fg_color="transparent")
+        row.pack(fill="x", padx=18, pady=16)
+        self.start_btn = ctk.CTkButton(
+            row, text="▶  Start Unlocking", height=46, corner_radius=self.R,
+            font=ctk.CTkFont(size=14, weight="bold"), command=self.start,
+            fg_color=BLUE, hover_color=BLUE_HOVER)
         self.start_btn.pack(side="left", fill="x", expand=True)
-        self._reg(self.start_btn, "primary")
-        self.stop_btn = tk.Button(row, text="⬛  Stop", command=self.stop,
-                                  font=("Segoe UI Semibold", 11), relief="flat",
-                                  bd=0, cursor="hand2", padx=18, pady=11,
-                                  state="disabled")
+        self._round.append(self.start_btn)
+        self.stop_btn = ctk.CTkButton(
+            row, text="■  Stop", width=130, height=46, corner_radius=self.R,
+            font=ctk.CTkFont(size=14, weight="bold"), command=self.stop,
+            state="disabled", fg_color="transparent", border_width=1,
+            border_color=GHOST_BORDER, text_color=("gray15", "gray90"),
+            hover_color=GHOST_HOVER)
         self.stop_btn.pack(side="left", padx=(10, 0))
-        self._reg(self.stop_btn, "ghost")
+        self._round.append(self.stop_btn)
 
     def _build_utilities_card(self, parent):
-        card = self._card(parent, "Utilities", "🔧")
-        card.pack(fill="y")
-        inner = tk.Frame(card); inner.pack(fill="both", padx=12, pady=(4, 14))
-        self._reg(inner, "card")
+        card = self._card(parent)
+        card.pack(fill="both", expand=True)
+        self._section_title(card, "\U0001F527  Utilities").pack(
+            fill="x", padx=16, pady=(14, 8))
+        inner = ctk.CTkFrame(card, fg_color="transparent")
+        inner.pack(fill="both", padx=14, pady=(0, 14))
+        W = 250
 
-        self.gpu_btn = self._ghost_button(inner, "Export for GPU (Hashcat)",
-                                          self.export_gpu, "⬆")
-        self.gpu_btn.pack(fill="x", pady=3)
-        self.hc_btn = self._ghost_button(inner, "Get Hashcat", self.get_hashcat, "⬇")
-        self.hc_btn.pack(fill="x", pady=3)
-        self.test_btn = self._ghost_button(inner, "Test GPU", self.test_gpu, "🖥")
-        self.test_btn.pack(fill="x", pady=3)
+        self.gpu_btn = self._ghost_button(inner, "⬆   Export for GPU (Hashcat)",
+                                          self.export_gpu)
+        self.gpu_btn.configure(width=W); self.gpu_btn.pack(fill="x", pady=4)
+        self.hc_btn = self._ghost_button(inner, "⬇   Get Hashcat",
+                                         self.get_hashcat)
+        self.hc_btn.configure(width=W); self.hc_btn.pack(fill="x", pady=4)
+        self.test_btn = self._ghost_button(inner, "\U0001F5A5   Test GPU",
+                                           self.test_gpu)
+        self.test_btn.configure(width=W); self.test_btn.pack(fill="x", pady=4)
 
-        self.run_btn = tk.Button(inner, text="▶   Run Hashcat now",
-                                 command=self.run_hashcat, font=("Segoe UI Semibold", 10),
-                                 relief="flat", bd=0, cursor="hand2", anchor="w",
-                                 padx=14, pady=10)
-        self.run_btn.pack(fill="x", pady=3); self._reg(self.run_btn, "purple")
-        self.bf_btn = tk.Button(inner, text="⚡   GPU brute-force (all combos)",
-                                command=self.run_gpu_bruteforce,
-                                font=("Segoe UI Semibold", 10), relief="flat",
-                                bd=0, cursor="hand2", anchor="w", padx=14, pady=10)
-        self.bf_btn.pack(fill="x", pady=3); self._reg(self.bf_btn, "purple")
+        self.run_btn = ctk.CTkButton(
+            inner, text="▶   Run Hashcat now", width=W, height=44,
+            corner_radius=self.R, anchor="w", command=self.run_hashcat,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=PURPLE, hover_color=PURPLE_HOVER)
+        self.run_btn.pack(fill="x", pady=4)
+        self._round.append(self.run_btn)
+        self.bf_btn = ctk.CTkButton(
+            inner, text="⚡   GPU brute-force (all combos)", width=W, height=44,
+            corner_radius=self.R, anchor="w", command=self.run_gpu_bruteforce,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=PURPLE, hover_color=PURPLE_HOVER)
+        self.bf_btn.pack(fill="x", pady=4)
+        self._round.append(self.bf_btn)
 
-        self.unlock_btn = self._ghost_button(inner, "Unlock with known password",
-                                             self.unlock_known, "🔒")
-        self.unlock_btn.pack(fill="x", pady=3)
+        self.unlock_btn = self._ghost_button(
+            inner, "\U0001F512   Unlock with known password", self.unlock_known)
+        self.unlock_btn.configure(width=W); self.unlock_btn.pack(fill="x", pady=4)
 
     def _build_status_card(self, parent):
-        card = self._card(parent, "Progress & Status", "📈")
-        card.pack(fill="x", padx=18, pady=(6, 16))
-        self.progress = ttk.Progressbar(card, mode="determinate",
-                                        style="WU.Horizontal.TProgressbar")
-        self.progress.pack(fill="x", padx=16, pady=(8, 8))
-        row = tk.Frame(card); row.pack(fill="x", padx=16, pady=(0, 14))
-        self._reg(row, "card")
-        self.status = tk.Label(row, text="● Idle", font=("Segoe UI", 10))
-        self.status.pack(side="left"); self._reg(self.status, "text")
-        self.tries_lbl = tk.Label(row, text="Tries: 0", font=("Segoe UI", 10))
-        self.tries_lbl.pack(side="left", padx=24); self._reg(self.tries_lbl, "muted")
-        self.eta_lbl = tk.Label(row, text="Speed: -    Est. time left: -",
-                                font=("Segoe UI", 10))
-        self.eta_lbl.pack(side="left"); self._reg(self.eta_lbl, "muted")
+        card = self._card(parent)
+        card.pack(fill="x", pady=(12, 0))
+        self._section_title(card, "≡  Progress & Status").pack(
+            fill="x", padx=18, pady=(12, 6))
+        self.progress = ctk.CTkProgressBar(card, height=12, corner_radius=self.R)
+        self.progress.set(0)
+        self.progress.pack(fill="x", padx=18, pady=(0, 10))
+        self._round.append(self.progress)
+        row = ctk.CTkFrame(card, fg_color="transparent")
+        row.pack(fill="x", padx=18, pady=(0, 14))
+        self.status = ctk.CTkLabel(row, text="● Idle",
+                                   text_color=BLUE, anchor="w")
+        self.status.pack(side="left")
+        self.tries_lbl = ctk.CTkLabel(row, text="Tries: 0",
+                                      text_color=("gray45", "gray60"))
+        self.tries_lbl.pack(side="left", padx=28)
+        self.eta_lbl = ctk.CTkLabel(row, text="Speed: -    Est. time left: -",
+                                    text_color=("gray45", "gray60"))
+        self.eta_lbl.pack(side="left")
 
-    # ---- theming ------------------------------------------------------
-    def apply_theme(self):
-        mode = self.theme_mode.get()
-        key = system_theme() if mode == "system" else mode
-        c = THEMES.get(key, THEMES["light"])
-        self.root.configure(bg=c["bg"])
-        for w, role in self._widgets:
+    # ---- settings dialog ---------------------------------------------
+    def open_settings(self):
+        win = ctk.CTkToplevel(self.root)
+        win.title("Settings")
+        win.transient(self.root)
+        win.geometry("460x620")
+        win.after(200, win.grab_set)
+        win.after(260, lambda: self._set_window_icon(win))
+
+        ctk.CTkLabel(win, text="Settings",
+                     font=ctk.CTkFont(size=18, weight="bold")).pack(
+            anchor="w", padx=20, pady=(18, 8))
+
+        # Appearance
+        sec1 = ctk.CTkFrame(win, corner_radius=self.R)
+        sec1.pack(fill="x", padx=16, pady=8)
+        ctk.CTkLabel(sec1, text="Appearance",
+                     font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=16, pady=(12, 6))
+
+        trow = ctk.CTkFrame(sec1, fg_color="transparent")
+        trow.pack(fill="x", padx=16, pady=4)
+        ctk.CTkLabel(trow, text="Theme").pack(side="left")
+        theme_menu = ctk.CTkOptionMenu(
+            trow, values=["System", "Light", "Dark"], width=140,
+            command=self._on_theme)
+        theme_menu.set(self.settings.get("theme", "System"))
+        theme_menu.pack(side="right")
+
+        crow = ctk.CTkFrame(sec1, fg_color="transparent")
+        crow.pack(fill="x", padx=16, pady=(4, 14))
+        ctk.CTkLabel(crow, text="UI corners").pack(side="left")
+        corner_seg = ctk.CTkSegmentedButton(
+            crow, values=["Rounded", "Sharp"], command=self._on_corners)
+        corner_seg.set(self.settings.get("corners", "Rounded"))
+        corner_seg.pack(side="right")
+
+        # Behaviour
+        sec2 = ctk.CTkFrame(win, corner_radius=self.R)
+        sec2.pack(fill="x", padx=16, pady=8)
+        ctk.CTkLabel(sec2, text="Behaviour",
+                     font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=16, pady=(12, 6))
+        self._switch(sec2, "Launch maximised (full screen)", "fullscreen")
+        self._switch(sec2, "Notify when a run is done", "notify_done")
+        self._switch(sec2, "Play a sound when done", "sound_done")
+        self._switch(sec2, "Confirm before closing during a run", "confirm_close")
+        self._switch(sec2, "Auto-download Hashcat when needed", "auto_hashcat")
+        ctk.CTkLabel(sec2, text="").pack(pady=2)
+
+        # Updates + about
+        ctk.CTkButton(win, text="Check for updates", corner_radius=self.R,
+                      command=self._check_updates).pack(fill="x", padx=16, pady=(8, 4))
+
+        about = ctk.CTkFrame(win, corner_radius=self.R)
+        about.pack(fill="x", padx=16, pady=8)
+        ctk.CTkLabel(about, text="About", font=ctk.CTkFont(weight="bold")).pack(
+            anchor="w", padx=16, pady=(12, 4))
+        ctk.CTkLabel(about, justify="left", anchor="w", text_color=("gray35", "gray70"),
+                     text=(f"{__app_name__}  v{__version__}\n"
+                           "License: MIT (free to use, modify, sell)\n"
+                           "Author: Fallax Vision and contributors")).pack(
+            anchor="w", padx=16, pady=(0, 6))
+        ctk.CTkButton(about, text="Open project on GitHub", corner_radius=self.R,
+                      fg_color="transparent", border_width=1, border_color=GHOST_BORDER,
+                      text_color=("gray15", "gray90"), hover_color=GHOST_HOVER,
+                      command=lambda: webbrowser.open(
+                          "https://github.com/Fallax-Vision/doc_unlocker")).pack(
+            fill="x", padx=16, pady=(0, 14))
+
+    def _switch(self, parent, text, key):
+        var = tk.BooleanVar(value=bool(self.settings.get(key)))
+
+        def _toggle():
+            self.settings[key] = bool(var.get())
+            save_settings(self.settings)
+
+        sw = ctk.CTkSwitch(parent, text=text, variable=var, command=_toggle)
+        sw.pack(anchor="w", padx=16, pady=6)
+        return sw
+
+    def _on_theme(self, value):
+        self.settings["theme"] = value
+        save_settings(self.settings)
+        ctk.set_appearance_mode(value)
+
+    def _on_corners(self, value):
+        self.settings["corners"] = value
+        save_settings(self.settings)
+        self.R = 14 if value == "Rounded" else 0
+        for w in self._round:
             try:
-                self._style_widget(w, role, c)
-            except tk.TclError:
+                w.configure(corner_radius=self.R)
+            except Exception:
                 pass
-        for card in self._cards:
-            card.configure(bg=c["card"], highlightbackground=c["card_border"],
-                           highlightcolor=c["card_border"])
-        self.style.configure("WU.Horizontal.TProgressbar",
-                             troughcolor=c["track"], background=c["bar"],
-                             bordercolor=c["track"], lightcolor=c["bar"],
-                             darkcolor=c["bar"], thickness=10)
-        self.style.configure("TCombobox", fieldbackground=c["entry_bg"],
-                             background=c["entry_bg"], foreground=c["entry_fg"])
-        self.style.configure("TSpinbox", fieldbackground=c["entry_bg"],
-                             foreground=c["entry_fg"], arrowcolor=c["text"])
+        try:
+            self.settings_btn.configure(corner_radius=self.R)
+        except Exception:
+            pass
 
-    def _style_widget(self, w, role, c):
-        if role == "bg":
-            w.configure(bg=c["bg"])
-        elif role == "card":
-            w.configure(bg=c["card"])
-        elif role == "title":
-            w.configure(bg=c["card"] if w.master in self._cards else c["bg"],
-                        fg=c["title"])
-        elif role == "text":
-            w.configure(bg=w.master.cget("bg"), fg=c["text"])
-        elif role == "muted":
-            w.configure(bg=w.master.cget("bg"), fg=c["muted"])
-        elif role == "entry":
-            w.configure(bg=c["entry_bg"], fg=c["entry_fg"],
-                        insertbackground=c["text"],
-                        highlightbackground=c["entry_border"],
-                        highlightcolor=c["accent"], disabledbackground=c["entry_bg"])
-        elif role == "check":
-            w.configure(bg=c["card"], fg=c["text"], activebackground=c["card"],
-                        activeforeground=c["text"], selectcolor=c["entry_bg"])
-        elif role == "primary":
-            w.configure(bg=c["accent"], fg=c["accent_fg"],
-                        activebackground=c["accent"], activeforeground=c["accent_fg"])
-        elif role == "purple":
-            w.configure(bg=c["purple"], fg=c["purple_fg"],
-                        activebackground=c["purple"], activeforeground=c["purple_fg"])
-        elif role == "ghost":
-            w.configure(bg=c["ghost_bg"], fg=c["ghost_fg"],
-                        activebackground=c["entry_bg"], activeforeground=c["ghost_fg"],
-                        highlightbackground=c["ghost_border"], highlightthickness=1)
+    def _check_updates(self):
+        def work():
+            try:
+                req = urllib.request.Request(
+                    "https://api.github.com/repos/Fallax-Vision/doc_unlocker/"
+                    "releases/latest", headers={"User-Agent": "DocUnlocker"})
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    data = json.loads(r.read().decode("utf-8"))
+                latest = (data.get("tag_name") or "").lstrip("v")
+                if not latest:
+                    msg = "No published releases were found yet."
+                elif latest != __version__:
+                    msg = (f"A newer version is available: v{latest}\n"
+                           f"You have v{__version__}.\n\n"
+                           "Download it from the GitHub Releases page.")
+                else:
+                    msg = f"You're up to date (v{__version__})."
+            except Exception as exc:
+                msg = f"Update check failed:\n{exc}"
+            self.root.after(0, lambda: messagebox.showinfo("Check for updates", msg))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    # ---- notifications / close ---------------------------------------
+    def _notify(self):
+        if not self.settings.get("notify_done", True):
+            return
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+        except Exception:
+            pass
+        if self.settings.get("sound_done", True) and sys.platform == "win32":
+            try:
+                import winsound
+                winsound.MessageBeep(winsound.MB_OK)
+            except Exception:
+                pass
+
+    def _on_close(self):
+        if self.settings.get("confirm_close", True) and self._jobs_alive():
+            if not messagebox.askyesno("Quit", "A run is in progress. Quit anyway?"):
+                return
+        self.stop_flag.set()
+        if self.hc_proc is not None:
+            try:
+                self.hc_proc.terminate()
+            except Exception:
+                pass
+        self.root.destroy()
 
     # ---- file pickers -------------------------------------------------
     def pick_doc(self):
@@ -1022,11 +1153,11 @@ class App:
             messagebox.showerror("Error", "The wordlist path is not a valid file.")
             return
         self.stop_flag.clear()
-        self.start_btn.config(state="disabled")
-        self.stop_btn.config(state="normal")
-        self.status.config(text="● Reading file...")
-        self.progress.config(value=0)
-        self.eta_lbl.config(text="Speed: measuring...    Est. time left: -")
+        self.start_btn.configure(state="disabled")
+        self.stop_btn.configure(state="normal")
+        self.status.configure(text="● Reading file...")
+        self.progress.set(0)
+        self.eta_lbl.configure(text="Speed: measuring...    Est. time left: -")
         self.worker = threading.Thread(
             target=self.run_crack,
             args=(doc, wl or None, int(self.digits_var.get()), self.mut_var.get(),
@@ -1036,7 +1167,7 @@ class App:
 
     def stop(self):
         self.stop_flag.set()
-        self.status.config(text="● Stopping...")
+        self.status.configure(text="● Stopping...")
         if self.hc_proc is not None:
             try:
                 self.hc_proc.terminate()
@@ -1060,7 +1191,6 @@ class App:
             tries = skipped = 0
             found = None
             stopped = False
-            # A PDF with only an owner/permissions password opens with "".
             if doc_kind == "pdf" and test_password(file_bytes, "", doc_kind):
                 found = ""
             start_t = time.time()
@@ -1127,7 +1257,6 @@ class App:
         return wl_path, hash_path, count, hash_note
 
     def _gpu_office_only(self, doc):
-        """GPU/Hashcat path supports Office only. Returns True if blocked (PDF)."""
         if detect_kind(doc) == "pdf":
             messagebox.showinfo(
                 "Office only",
@@ -1137,6 +1266,17 @@ class App:
             return True
         return False
 
+    def _need_hashcat(self):
+        """Return a hashcat path, or kick off auto-download / show a hint."""
+        hc = find_hashcat()
+        if hc:
+            return hc
+        if self.settings.get("auto_hashcat"):
+            self.get_hashcat()
+        else:
+            messagebox.showwarning("Hashcat needed", "Click 'Get Hashcat' first.")
+        return None
+
     def export_gpu(self):
         doc = self.doc_var.get().strip().strip('"')
         if not doc or not os.path.isfile(doc):
@@ -1145,8 +1285,8 @@ class App:
         if self._gpu_office_only(doc):
             return
         wl = self.wl_var.get().strip().strip('"')
-        self.gpu_btn.config(state="disabled")
-        self.status.config(text="● Building GPU package...")
+        self.gpu_btn.configure(state="disabled")
+        self.status.configure(text="● Building GPU package...")
         self.gpu_thread = threading.Thread(
             target=self._export_gpu_worker,
             args=(doc, wl or None, self.mut_var.get(), self.two_var.get(),
@@ -1189,9 +1329,9 @@ class App:
                 f"Hashcat {HASHCAT_VERSION} (the GPU cracker) is not installed.\n\n"
                 "Download it now (~20 MB) and unpack it next to this tool?"):
             return
-        self.gpu_btn.config(state="disabled")
-        self.hc_btn.config(state="disabled")
-        self.status.config(text="● Downloading Hashcat...")
+        self.gpu_btn.configure(state="disabled")
+        self.hc_btn.configure(state="disabled")
+        self.status.configure(text="● Downloading Hashcat...")
         self.hc_thread = threading.Thread(target=self._get_hashcat_worker, daemon=True)
         self.hc_thread.start()
         self.ensure_pump()
@@ -1211,7 +1351,7 @@ class App:
             messagebox.showwarning("Hashcat needed",
                                    "Click 'Get Hashcat' first, then 'Test GPU'.")
             return
-        self.status.config(text="● Querying GPU devices...")
+        self.status.configure(text="● Querying GPU devices...")
         self.hc_run_thread = threading.Thread(target=self._test_gpu_worker,
                                               args=(hc,), daemon=True)
         self.hc_run_thread.start()
@@ -1245,9 +1385,8 @@ class App:
             return
         if self._gpu_office_only(doc):
             return
-        hc = find_hashcat()
+        hc = self._need_hashcat()
         if not hc:
-            messagebox.showwarning("Hashcat needed", "Click 'Get Hashcat' first.")
             return
         wl = self.wl_var.get().strip().strip('"')
         self._begin_gpu_run()
@@ -1288,9 +1427,8 @@ class App:
             return
         if self._gpu_office_only(doc):
             return
-        hc = find_hashcat()
+        hc = self._need_hashcat()
         if not hc:
-            messagebox.showwarning("Hashcat needed", "Click 'Get Hashcat' first.")
             return
         params = self._ask_mask_params()
         if not params:
@@ -1381,49 +1519,55 @@ class App:
         self.q.put(("hcrun_found", pwd, out_path, log_path))
 
     def _ask_mask_params(self):
-        win = tk.Toplevel(self.root)
+        win = ctk.CTkToplevel(self.root)
         win.title("GPU brute-force - all combinations")
         win.transient(self.root)
-        win.grab_set()
-        win.resizable(False, False)
-        tk.Label(win, text="Character set to try every combination of:",
-                 anchor="w").grid(row=0, column=0, columnspan=2, sticky="w",
-                                  padx=10, pady=(10, 2))
+        win.geometry("440x440")
+        win.after(200, win.grab_set)
+
+        ctk.CTkLabel(win, text="Try every combination of:",
+                     font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=18, pady=(16, 6))
         cs_var = tk.IntVar(value=0)
         for i, (label, _ph, _c, _sz) in enumerate(self.MASK_CHARSETS):
-            tk.Radiobutton(win, text=label, variable=cs_var, value=i,
-                           command=lambda: _update()).grid(
-                row=1 + i, column=0, columnspan=2, sticky="w", padx=20)
-        row = 1 + len(self.MASK_CHARSETS)
-        tk.Label(win, text="Maximum length:").grid(row=row, column=0, sticky="w",
-                                                   padx=10, pady=6)
-        len_var = tk.IntVar(value=6)
-        ttk.Spinbox(win, from_=1, to=12, width=5, textvariable=len_var,
-                    command=lambda: _update()).grid(row=row, column=1, sticky="w")
-        info = tk.Label(win, text="", fg="#a33", justify="left", anchor="w",
-                        wraplength=380)
-        info.grid(row=row + 1, column=0, columnspan=2, sticky="w", padx=10, pady=6)
+            ctk.CTkRadioButton(win, text=label, variable=cs_var, value=i,
+                               command=lambda: _update()).pack(
+                anchor="w", padx=24, pady=4)
+
+        lrow = ctk.CTkFrame(win, fg_color="transparent")
+        lrow.pack(fill="x", padx=18, pady=(10, 4))
+        ctk.CTkLabel(lrow, text="Maximum length:").pack(side="left")
+        len_var = tk.StringVar(value="6")
+        ctk.CTkOptionMenu(lrow, width=72, variable=len_var,
+                          values=[str(i) for i in range(1, 13)],
+                          command=lambda *_: _update()).pack(side="left", padx=10)
+
+        info = ctk.CTkLabel(win, text="", justify="left", anchor="w",
+                            text_color=("#a33", "#ff8b8b"), wraplength=390)
+        info.pack(anchor="w", padx=18, pady=6)
         result = {"val": None}
 
         def _update(*_):
             size = self.MASK_CHARSETS[cs_var.get()][3]
             n = int(len_var.get() or 1)
             ks = sum(size ** i for i in range(1, n + 1))
-            info.config(text=(f"Combinations to try: {ks:,}\n"
-                              f"Worst-case at ~3,000 guesses/sec: "
-                              f"{format_duration(ks / 3000.0)}.\n"
-                              "Tip: digits or lowercase up to ~7 is realistic."))
+            info.configure(text=(f"Combinations to try: {ks:,}\n"
+                                 f"Worst-case at ~3,000 guesses/sec: "
+                                 f"{format_duration(ks / 3000.0)}.\n"
+                                 "Tip: digits or lowercase up to ~7 is realistic."))
 
         def _ok():
             _label, ph, custom, _sz = self.MASK_CHARSETS[cs_var.get()]
             result["val"] = (custom, ph * int(len_var.get() or 1))
             win.destroy()
 
-        btns = tk.Frame(win)
-        btns.grid(row=row + 2, column=0, columnspan=2, pady=10)
-        tk.Button(btns, text="Start brute-force", command=_ok, width=16).pack(
-            side="left", padx=6)
-        tk.Button(btns, text="Cancel", command=win.destroy, width=10).pack(side="left")
+        brow = ctk.CTkFrame(win, fg_color="transparent")
+        brow.pack(fill="x", padx=18, pady=14)
+        ctk.CTkButton(brow, text="Start brute-force", command=_ok,
+                      fg_color=PURPLE, hover_color=PURPLE_HOVER).pack(side="left")
+        ctk.CTkButton(brow, text="Cancel", command=win.destroy,
+                      fg_color="transparent", border_width=1, border_color=GHOST_BORDER,
+                      text_color=("gray15", "gray90"), hover_color=GHOST_HOVER).pack(
+            side="left", padx=10)
         _update()
         self.root.wait_window(win)
         return result["val"]
@@ -1452,7 +1596,7 @@ class App:
             messagebox.showinfo("Unlocked",
                                 f"Password accepted.\n\nSaved to:\n{out_path}\n\n"
                                 f"Logged to:\n{log_path}")
-            self.status.config(text=f"● Unlocked with: {pw}")
+            self.status.configure(text=f"● Unlocked with: {pw}")
         except Exception as exc:
             messagebox.showerror("Error", str(exc))
 
@@ -1460,18 +1604,18 @@ class App:
     def _begin_gpu_run(self):
         self.stop_flag.clear()
         for b in (self.gpu_btn, self.hc_btn, self.run_btn, self.bf_btn):
-            b.config(state="disabled")
-        self.stop_btn.config(state="normal")
-        self.status.config(text="● Preparing GPU run...")
+            b.configure(state="disabled")
+        self.stop_btn.configure(state="normal")
+        self.status.configure(text="● Preparing GPU run...")
 
     def finish(self):
-        self.start_btn.config(state="normal")
-        self.stop_btn.config(state="disabled")
+        self.start_btn.configure(state="normal")
+        self.stop_btn.configure(state="disabled")
 
     def _finish_hc(self):
         for b in (self.gpu_btn, self.hc_btn, self.run_btn, self.bf_btn):
-            b.config(state="normal")
-        self.stop_btn.config(state="disabled")
+            b.configure(state="normal")
+        self.stop_btn.configure(state="disabled")
 
     def _jobs_alive(self):
         return any(t is not None and t.is_alive() for t in
@@ -1482,6 +1626,11 @@ class App:
             self._pump_active = True
             self.root.after(100, self.pump)
 
+    def _set_progress(self, value, total=None):
+        if total is not None:
+            self._ptotal = max(1, total)
+        self.progress.set(min(1.0, max(0.0, value / self._ptotal)))
+
     # ---- UI pump (main thread) ---------------------------------------
     def pump(self):
         try:
@@ -1489,22 +1638,24 @@ class App:
                 msg = self.q.get_nowait()
                 kind = msg[0]
                 if kind == "total":
-                    self.progress.config(maximum=max(1, msg[1]), value=0)
-                    self.status.config(text=f"● Trying up to {msg[1]:,} passwords...")
+                    self._ptotal = max(1, msg[1])
+                    self.progress.set(0)
+                    self.status.configure(text=f"● Trying up to {msg[1]:,} passwords...")
                 elif kind == "progress":
                     _, tries, pw, skipped, rate, eta, total = msg
-                    self.progress.config(value=tries)
+                    self._set_progress(tries, total)
                     extra = f"   (skipped {skipped:,})" if skipped else ""
-                    self.tries_lbl.config(text=f"Tries: {tries:,}{extra}")
-                    self.eta_lbl.config(
+                    self.tries_lbl.configure(text=f"Tries: {tries:,}{extra}")
+                    self.eta_lbl.configure(
                         text=f"Speed: {rate:,.0f} pw/s    "
                              f"Est. time left: {format_duration(eta)}")
                 elif kind == "found":
                     _, tries, pw, out_path, log_path = msg
-                    self.progress.config(value=self.progress["maximum"])
-                    self.tries_lbl.config(text=f"Tries: {tries:,}")
+                    self.progress.set(1.0)
+                    self.tries_lbl.configure(text=f"Tries: {tries:,}")
                     self.finish()
-                    self.status.config(text=f"● Done. Password: {pw}")
+                    self.status.configure(text=f"● Done. Password: {pw}")
+                    self._notify()
                     messagebox.showinfo("Password found!",
                                         f"Success!\n\nTries: {tries:,}\n"
                                         f"Password: {pw}\n\nUnlocked copy:\n{out_path}\n\n"
@@ -1513,7 +1664,8 @@ class App:
                 elif kind == "nofound":
                     _, tries, saved, tested_file = msg
                     self.finish()
-                    self.status.config(text="● Not found.")
+                    self.status.configure(text="● Not found.")
+                    self._notify()
                     messagebox.showwarning("Not found",
                                            f"Tried {tries:,} passwords.\nSaved "
                                            f"{saved:,} to:\n{tested_file}\n(skipped "
@@ -1522,20 +1674,20 @@ class App:
                 elif kind == "stopped":
                     _, tries, saved, tested_file = msg
                     self.finish()
-                    self.status.config(text="● Stopped.")
+                    self.status.configure(text="● Stopped.")
                     messagebox.showinfo("Stopped",
                                         f"Stopped after {tries:,} new tries.\n"
                                         f"Saved {saved:,} to:\n{tested_file}")
                     break
                 elif kind == "error":
                     self.finish()
-                    self.status.config(text="● Error.")
+                    self.status.configure(text="● Error.")
                     messagebox.showerror("Error", msg[1])
                     break
                 elif kind == "gpu_done":
                     _, count, wl_path, hash_path, bat_path, hc, note = msg
-                    self.gpu_btn.config(state="normal")
-                    self.status.config(text="● GPU package ready.")
+                    self.gpu_btn.configure(state="normal")
+                    self.status.configure(text="● GPU package ready.")
                     extra = (f"Hashcat found:\n{hc}\n\nDouble-click:\n{bat_path}"
                              if hc else "Hashcat not installed - click 'Get Hashcat'.")
                     messagebox.showinfo("GPU package ready",
@@ -1544,52 +1696,54 @@ class App:
                                         + extra + note)
                     break
                 elif kind == "gpu_error":
-                    self.gpu_btn.config(state="normal")
-                    self.status.config(text="● GPU export failed.")
+                    self.gpu_btn.configure(state="normal")
+                    self.status.configure(text="● GPU export failed.")
                     messagebox.showerror("GPU export failed", msg[1])
                     break
                 elif kind == "hc_progress":
                     _, done, total = msg
-                    self.progress.config(maximum=max(1, total), value=done)
-                    self.status.config(text=f"● Downloading Hashcat... "
-                                            f"{done/1048576:.1f}/{total/1048576:.1f} MB")
+                    self.progress.set(min(1.0, done / max(1, total)))
+                    self.status.configure(text=f"● Downloading Hashcat... "
+                                          f"{done/1048576:.1f}/{total/1048576:.1f} MB")
                 elif kind == "hc_done":
-                    self.gpu_btn.config(state="normal")
-                    self.hc_btn.config(state="normal")
-                    self.status.config(text="● Hashcat installed.")
+                    self.gpu_btn.configure(state="normal")
+                    self.hc_btn.configure(state="normal")
+                    self.status.configure(text="● Hashcat installed.")
                     messagebox.showinfo("Hashcat ready",
                                         f"Installed at:\n{msg[1]}\n\nNow use "
                                         "'Run Hashcat now' or 'GPU brute-force'.")
                     break
                 elif kind == "hc_error":
-                    self.gpu_btn.config(state="normal")
-                    self.hc_btn.config(state="normal")
-                    self.status.config(text="● Hashcat download failed.")
+                    self.gpu_btn.configure(state="normal")
+                    self.hc_btn.configure(state="normal")
+                    self.status.configure(text="● Hashcat download failed.")
                     messagebox.showerror("Hashcat download failed",
                                          msg[1] + "\n\nManual: https://hashcat.net/"
                                          "hashcat/ unzip into:\n" + app_dir())
                     break
                 elif kind == "gpu_test":
-                    self.status.config(text="● " + msg[1])
+                    self.status.configure(text="● " + msg[1])
                     messagebox.showinfo("Test GPU", msg[1] + "\n\n" + msg[2])
                     break
                 elif kind == "gpu_test_error":
-                    self.status.config(text="● GPU test failed.")
+                    self.status.configure(text="● GPU test failed.")
                     messagebox.showerror("Test GPU failed", msg[1])
                     break
                 elif kind == "hcrun_status":
-                    self.status.config(text="● " + msg[1])
+                    self.status.configure(text="● " + msg[1])
                 elif kind == "hcrun_found":
                     _, pw, out_path, log_path = msg
                     self._finish_hc()
-                    self.status.config(text=f"● GPU crack done. Password: {pw}")
+                    self.status.configure(text=f"● GPU crack done. Password: {pw}")
+                    self._notify()
                     messagebox.showinfo("Password found (GPU)!",
                                         f"Hashcat cracked it!\n\nPassword: {pw}\n\n"
                                         f"Unlocked copy:\n{out_path}\n\nLogged to:\n{log_path}")
                     break
                 elif kind == "hcrun_nofound":
                     self._finish_hc()
-                    self.status.config(text="● Not in wordlist.")
+                    self.status.configure(text="● Not in wordlist.")
+                    self._notify()
                     messagebox.showwarning("Not found (GPU)",
                                            "Hashcat finished the wordlist without "
                                            "finding the password. Try more options "
@@ -1597,12 +1751,13 @@ class App:
                     break
                 elif kind == "hcrun_stopped":
                     self._finish_hc()
-                    self.status.config(text="● GPU crack stopped.")
+                    self.status.configure(text="● GPU crack stopped.")
                     messagebox.showinfo("Stopped", "Hashcat was stopped.")
                     break
                 elif kind == "hcrun_error":
                     self._finish_hc()
-                    self.status.config(text="● GPU crack failed.")
+                    self.status.configure(text="● GPU crack failed.")
+                    self._notify()
                     messagebox.showerror("Hashcat run failed", msg[1])
                     break
         except queue.Empty:
@@ -1631,7 +1786,7 @@ def _set_app_user_model_id():
 
 def main():
     _set_app_user_model_id()
-    root = tk.Tk()
+    root = ctk.CTk()
     App(root)
     root.mainloop()
 

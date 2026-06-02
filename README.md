@@ -65,7 +65,9 @@ your GPU:
 
 ### C. Quality-of-life
 
-- **Light / Dark / System** theme.
+- Modern rounded interface with a **Light / Dark / System** theme.
+- **Settings panel** (gear icon): theme, rounded/sharp corners, launch
+  maximised, finish notifications + sound, and a "Check for updates" button.
 - Live **tries counter**, **speed**, and **estimated time remaining**.
 - **Resume**: tried passwords are remembered per file and skipped next time.
 - **Unlock with known password** if you already have it.
@@ -100,7 +102,8 @@ py doc_unlocker.py
 ```
 
 On first launch the app will offer to install its small dependencies
-(`msoffcrypto-tool`, `olefile`, `pypdf`) automatically if they are missing.
+(`msoffcrypto-tool`, `olefile`, `pypdf`, `customtkinter`) automatically if they
+are missing.
 
 > Hashcat is optional. Click **Get Hashcat** inside the app to fetch it, or
 > install it yourself from [hashcat.net](https://hashcat.net) and make sure

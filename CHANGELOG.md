@@ -6,8 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [1.0.2] - 2026-06-02
 
+### Changed
+
+- **Redesigned interface** (built on CustomTkinter): rounded cards and
+  buttons, a cleaner two-pane layout, and a header that matches the body
+  background in dark mode.
+- The window now opens **centred** on the screen.
+
 ### Added
 
+- **Settings panel** (gear button in the header): theme (Light / Dark /
+  System), UI corners (Rounded / Sharp), launch maximised, notify when a run
+  is done, play a sound when done, confirm-before-closing during a run,
+  auto-download Hashcat, a "Check for updates" button, and an About section
+  (license, author, version).
 - **Explicit Excel and PowerPoint support.** Encrypted `.xlsx`/`.xlsm` and
   `.pptx`/`.pptm` files are now first-class: dedicated entries in the file
   picker and documented support. They use the same proven Office engine as

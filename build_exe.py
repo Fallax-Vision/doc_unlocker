@@ -21,8 +21,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # Heavy libraries that may be present in the environment but are NOT used by
 # the app at runtime - excluding them keeps the binary small.
 EXCLUDES = [
-    "numpy", "scipy", "pandas", "matplotlib", "PIL", "Pillow",
-    "pytest", "IPython", "notebook", "tcl8", "setuptools", "pip",
+    # Note: do NOT exclude PIL/Pillow - CustomTkinter depends on it.
+    "numpy", "scipy", "pandas", "matplotlib",
+    "pytest", "IPython", "notebook", "setuptools", "pip",
     "wheel", "lib2to3", "pydoc_data",
 ]
 
@@ -44,6 +45,9 @@ def main():
         "--onefile", "--windowed",
         "--name", "DocUnlocker",
         "--noconfirm", "--clean",
+        # CustomTkinter ships theme JSON + fonts as data files; bundle them all
+        # or the frozen exe cannot find its assets and fails to start.
+        "--collect-all", "customtkinter",
     ]
     sep = ";" if os.name == "nt" else ":"
     icon = os.path.join(HERE, "assets", "icon.ico")

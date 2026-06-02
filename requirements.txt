@@ -2,6 +2,7 @@
 msoffcrypto-tool>=5.0   # Microsoft Office decryption
 olefile>=0.46           # reads the Office EncryptionInfo (also a dep of the above)
 pypdf>=4.0              # PDF detection / verification / decryption
+customtkinter>=5.2      # modern rounded UI (themes, light/dark/system)
 
 # Optional: only needed as a fallback to unpack Hashcat's .7z on systems
 # without the built-in Windows 'tar' (libarchive) or 7-Zip. Safe to skip.

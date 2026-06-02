@@ -4,6 +4,23 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-06-02
+
+### Added
+
+- **PDF support.** Doc Unlocker can now recover the open password of
+  encrypted PDF files and save an unlocked copy (powered by `pypdf`):
+  - works with the CPU smart-guessing attack and with
+    *Unlock with known password*,
+  - permission/owner-only protected PDFs are unlocked automatically,
+  - the file picker now lists `.pdf` files.
+
+### Notes
+
+- GPU acceleration (Hashcat) still targets Office files only; selecting a PDF
+  for a GPU action shows a clear message to use the CPU path instead. PDF GPU
+  modes are planned for a future release.
+
 ## [1.0.0] - 2026-06-02
 
 First public release.

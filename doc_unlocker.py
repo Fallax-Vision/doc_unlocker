@@ -19,7 +19,7 @@ PowerPoint and other document types.
 
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 __app_name__ = "Doc Unlocker"
 
 import io
@@ -59,6 +59,10 @@ def ensure_dependencies():
         import olefile  # noqa: F401
     except ImportError:
         missing.append("olefile")
+    try:
+        import pypdf  # noqa: F401  (PDF support)
+    except ImportError:
+        missing.append("pypdf")
     if not missing:
         return True
 
@@ -78,6 +82,7 @@ def ensure_dependencies():
             _pip_install(pkg)
         import msoffcrypto  # noqa: F401
         import olefile      # noqa: F401
+        import pypdf        # noqa: F401
         return True
     except Exception as exc:  # pragma: no cover
         r = tk.Tk()
@@ -86,7 +91,7 @@ def ensure_dependencies():
             "Setup failed",
             "Could not install the dependencies automatically.\n\n"
             "Open a terminal and run:\n\n"
-            f'    "{sys.executable}" -m pip install msoffcrypto-tool olefile\n\n'
+            f'    "{sys.executable}" -m pip install msoffcrypto-tool olefile pypdf\n\n'
             f"Details: {exc}",
         )
         r.destroy()
@@ -98,6 +103,7 @@ if not ensure_dependencies():
 
 import olefile
 import msoffcrypto
+import pypdf
 
 
 # ===========================================================================
@@ -434,7 +440,23 @@ def extract_office_hash(doc_path):
 _OFFICE_MAGIC = (b"PK\x03\x04", b"\xd0\xcf\x11\xe0")
 
 
-def _decrypt_bytes(file_bytes, password):
+def detect_kind(path):
+    """Return 'pdf' or 'office' based on the file extension."""
+    return "pdf" if os.path.splitext(path)[1].lower() == ".pdf" else "office"
+
+
+def is_protected(file_bytes, kind):
+    """True if the document is password/encryption protected."""
+    try:
+        if kind == "pdf":
+            return pypdf.PdfReader(io.BytesIO(file_bytes)).is_encrypted
+        return msoffcrypto.OfficeFile(io.BytesIO(file_bytes)).is_encrypted()
+    except Exception:
+        return False
+
+
+# --- Office ---------------------------------------------------------------
+def _office_decrypt_bytes(file_bytes, password):
     office = msoffcrypto.OfficeFile(io.BytesIO(file_bytes))
     office.load_key(password=password)
     out = io.BytesIO()
@@ -442,20 +464,46 @@ def _decrypt_bytes(file_bytes, password):
     return out.getvalue()
 
 
-def test_password(file_bytes, password):
-    """
-    True if `password` is correct. msoffcrypto has no reliable verify method,
-    so we decrypt and check the output really is a valid Office container.
-    """
+# --- PDF ------------------------------------------------------------------
+def _pdf_reader(file_bytes):
+    return pypdf.PdfReader(io.BytesIO(file_bytes))
+
+
+def _pdf_test(file_bytes, password):
+    reader = _pdf_reader(file_bytes)
+    if not reader.is_encrypted:
+        return True
+    # decrypt() returns 0/NOT_DECRYPTED on failure, non-zero on success.
+    return int(reader.decrypt(password)) != 0
+
+
+def _pdf_decrypt_to(file_bytes, password, out_path):
+    reader = _pdf_reader(file_bytes)
+    if reader.is_encrypted and int(reader.decrypt(password)) == 0:
+        raise RuntimeError("Wrong password for this PDF.")
+    writer = pypdf.PdfWriter()
+    writer.append(reader)
+    with open(out_path, "wb") as f:
+        writer.write(f)
+
+
+# --- unified dispatch -----------------------------------------------------
+def test_password(file_bytes, password, kind="office"):
+    """True if `password` opens the document (Office or PDF)."""
     try:
-        head = _decrypt_bytes(file_bytes, password)[:4]
+        if kind == "pdf":
+            return _pdf_test(file_bytes, password)
+        head = _office_decrypt_bytes(file_bytes, password)[:4]
         return head.startswith(_OFFICE_MAGIC)
     except Exception:
         return False
 
 
-def decrypt_to(file_bytes, password, out_path):
-    data = _decrypt_bytes(file_bytes, password)
+def decrypt_to(file_bytes, password, out_path, kind="office"):
+    if kind == "pdf":
+        _pdf_decrypt_to(file_bytes, password, out_path)
+        return
+    data = _office_decrypt_bytes(file_bytes, password)
     if not data[:4].startswith(_OFFICE_MAGIC):
         raise RuntimeError("Decryption produced invalid output (wrong password).")
     with open(out_path, "wb") as out:
@@ -925,7 +973,9 @@ class App:
     def pick_doc(self):
         path = filedialog.askopenfilename(
             title="Select the locked document",
-            filetypes=[("Office documents", "*.docx *.xlsx *.pptx *.doc *.xls *.ppt"),
+            filetypes=[("Documents", "*.docx *.xlsx *.pptx *.doc *.xls *.ppt *.pdf"),
+                       ("PDF files", "*.pdf"),
+                       ("Office documents", "*.docx *.xlsx *.pptx *.doc *.xls *.ppt"),
                        ("All files", "*.*")])
         if path:
             self.doc_var.set(path)
@@ -974,8 +1024,8 @@ class App:
         try:
             with open(doc_path, "rb") as f:
                 file_bytes = f.read()
-            probe = msoffcrypto.OfficeFile(io.BytesIO(file_bytes))
-            if not probe.is_encrypted():
+            doc_kind = detect_kind(doc_path)
+            if not is_protected(file_bytes, doc_kind):
                 self.q.put(("error", "This file is not password-protected."))
                 return
             candidates, total = build_candidates(
@@ -986,8 +1036,13 @@ class App:
             tries = skipped = 0
             found = None
             stopped = False
+            # A PDF with only an owner/permissions password opens with "".
+            if doc_kind == "pdf" and test_password(file_bytes, "", doc_kind):
+                found = ""
             start_t = time.time()
             for pw in candidates:
+                if found is not None:
+                    break
                 if self.stop_flag.is_set():
                     stopped = True
                     break
@@ -1004,18 +1059,18 @@ class App:
                     remaining = max(0, total - tries - skipped)
                     eta = remaining / rate if rate > 0 else None
                     self.q.put(("progress", tries, pw, skipped, rate, eta, total))
-                if test_password(file_bytes, pw):
+                if test_password(file_bytes, pw, doc_kind):
                     found = pw
                     break
                 new_tested.append(pw)
             tested_file = append_tested(doc_path, new_tested)
             if found is None:
-                kind = "stopped" if stopped else "nofound"
-                self.q.put((kind, tries, len(new_tested), tested_file))
+                msg_kind = "stopped" if stopped else "nofound"
+                self.q.put((msg_kind, tries, len(new_tested), tested_file))
                 return
             folder = os.path.dirname(doc_path)
             out_path = os.path.join(folder, "Unlocked_" + os.path.basename(doc_path))
-            decrypt_to(file_bytes, found, out_path)
+            decrypt_to(file_bytes, found, out_path, doc_kind)
             log_path = write_log(folder, doc_path, found, tries, out_path)
             self.q.put(("found", tries, found, out_path, log_path))
         except Exception as exc:
@@ -1047,10 +1102,23 @@ class App:
             hash_note = f"\n\nNOTE: hash extraction failed: {exc}"
         return wl_path, hash_path, count, hash_note
 
+    def _gpu_office_only(self, doc):
+        """GPU/Hashcat path supports Office only. Returns True if blocked (PDF)."""
+        if detect_kind(doc) == "pdf":
+            messagebox.showinfo(
+                "Office only",
+                "GPU acceleration (Hashcat) currently supports Microsoft Office "
+                "files only (.docx / .xlsx / .pptx).\n\nFor PDFs, use "
+                "'Start Unlocking' (CPU) or 'Unlock with known password'.")
+            return True
+        return False
+
     def export_gpu(self):
         doc = self.doc_var.get().strip().strip('"')
         if not doc or not os.path.isfile(doc):
             messagebox.showerror("Error", "Please choose a valid document path.")
+            return
+        if self._gpu_office_only(doc):
             return
         wl = self.wl_var.get().strip().strip('"')
         self.gpu_btn.config(state="disabled")
@@ -1151,6 +1219,8 @@ class App:
         if not doc or not os.path.isfile(doc):
             messagebox.showerror("Error", "Please choose a valid document path.")
             return
+        if self._gpu_office_only(doc):
+            return
         hc = find_hashcat()
         if not hc:
             messagebox.showwarning("Hashcat needed", "Click 'Get Hashcat' first.")
@@ -1191,6 +1261,8 @@ class App:
         doc = self.doc_var.get().strip().strip('"')
         if not doc or not os.path.isfile(doc):
             messagebox.showerror("Error", "Please choose a valid document path.")
+            return
+        if self._gpu_office_only(doc):
             return
         hc = find_hashcat()
         if not hc:
@@ -1345,12 +1417,13 @@ class App:
         try:
             with open(doc, "rb") as f:
                 file_bytes = f.read()
-            if not test_password(file_bytes, pw):
+            kind = detect_kind(doc)
+            if not test_password(file_bytes, pw, kind):
                 messagebox.showerror("Wrong password", "That password did not work.")
                 return
             folder = os.path.dirname(doc)
             out_path = os.path.join(folder, "Unlocked_" + os.path.basename(doc))
-            decrypt_to(file_bytes, pw, out_path)
+            decrypt_to(file_bytes, pw, out_path, kind)
             log_path = write_log(folder, doc, pw, 0, out_path)
             messagebox.showinfo("Unlocked",
                                 f"Password accepted.\n\nSaved to:\n{out_path}\n\n"

@@ -4,10 +4,10 @@
 
 # Doc Unlocker
 
-**Recover the password of a Microsoft Office document _you own_ - with a friendly GUI, smart guessing, and optional GPU acceleration.**
+**Recover the password of a Microsoft Office or PDF document _you own_ - with a friendly GUI, smart guessing, and optional GPU acceleration.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-success.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.1-success.svg)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-Windows-informational.svg)](#installation)
 [![Python](https://img.shields.io/badge/python-3.10%2B-yellow.svg)](https://www.python.org/)
 
@@ -26,8 +26,11 @@ responsible for how you use this software. See the [MIT License](LICENSE).
 
 ## What it does
 
-You point it at a password-protected Office file and it tries to find the
+You point it at a password-protected document and it tries to find the
 password so it can produce an **unlocked copy** (`Unlocked_<yourfile>`).
+
+**Supported files:** Microsoft Office (`.docx`, `.xlsx`, `.pptx`, and legacy
+`.doc`/`.xls`/`.ppt`) and **PDF** (`.pdf`).
 
 It works on two levels.
 
@@ -54,6 +57,10 @@ your GPU:
 | **Run Hashcat now** | Builds a smart wordlist + hash, runs the attack, and **auto-creates the unlocked copy** when it succeeds. |
 | **GPU brute-force (all combos)** | A mask attack that tries *every* combination of a chosen character set / length - with a keyspace and time estimate first. |
 | **Export for GPU** | Generates the wordlist, hash, and a ready-to-run `run_hashcat.bat`. |
+
+> GPU acceleration currently targets **Office files only**. PDFs are handled by
+> the CPU path (smart guessing / *Unlock with known password*); PDF GPU modes
+> are planned for a future release.
 
 ### C. Quality-of-life
 
@@ -91,8 +98,8 @@ py -m pip install -r requirements.txt
 py doc_unlocker.py
 ```
 
-On first launch the app will offer to install its two small dependencies
-(`msoffcrypto-tool`, `olefile`) automatically if they are missing.
+On first launch the app will offer to install its small dependencies
+(`msoffcrypto-tool`, `olefile`, `pypdf`) automatically if they are missing.
 
 > Hashcat is optional. Click **Get Hashcat** inside the app to fetch it, or
 > install it yourself from [hashcat.net](https://hashcat.net) and make sure
@@ -113,12 +120,13 @@ On first launch the app will offer to install its two small dependencies
 
 ## How it works (under the hood)
 
-- Reads the document's `EncryptionInfo` and builds a Hashcat-compatible
-  `$office$*2013*...` hash **natively** in Python (`olefile`).
+- For Office files: reads the document's `EncryptionInfo` and builds a
+  Hashcat-compatible `$office$*2013*...` hash **natively** in Python (`olefile`).
 - Verifies a candidate by **actually decrypting** the file and checking the
-  output is a valid Office container - so it never reports a false success.
-- Uses [`msoffcrypto-tool`](https://github.com/nolze/msoffcrypto-tool) for
-  decryption and [Hashcat](https://hashcat.net) for GPU cracking.
+  output is a valid document - so it never reports a false success.
+- Uses [`msoffcrypto-tool`](https://github.com/nolze/msoffcrypto-tool) for Office
+  decryption, [`pypdf`](https://github.com/py-pdf/pypdf) for PDFs, and
+  [Hashcat](https://hashcat.net) for GPU cracking of Office files.
 
 ---
 

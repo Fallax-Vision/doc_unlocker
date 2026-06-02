@@ -735,8 +735,8 @@ class App:
 
         root.title(f"{__app_name__} - Password Recovery  v{__version__}")
         root.configure(fg_color=APP_BG)
-        self._center(960, 680)
-        root.minsize(900, 640)
+        self._center(900, 560)
+        root.minsize(820, 560)
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         root.bind("<Control-comma>", lambda _event: self.open_settings())
         self._set_window_icon(root)
@@ -783,8 +783,8 @@ class App:
         self.root.update_idletasks()
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        w = min(w, max(860, sw - 80))
-        h = min(h, max(680, sh - 80))
+        w = min(w, max(820, sw - 80))
+        h = min(h, max(540, sh - 80))
         x = max(0, (sw - w) // 2)
         y = max(0, (sh - h) // divisor)
         return f"{w}x{h}+{x}+{y}"
@@ -799,14 +799,14 @@ class App:
 
     def _section_title(self, parent, text):
         return ctk.CTkLabel(parent, text=text, anchor="w", text_color=TEXT,
-                            font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"))
+                            font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"))
 
     def _entry(self, parent, textvariable, placeholder=""):
         e = ctk.CTkEntry(parent, textvariable=textvariable, corner_radius=self.R,
-                         height=38, placeholder_text=placeholder, fg_color=FIELD_FG,
+                         height=34, placeholder_text=placeholder, fg_color=FIELD_FG,
                          border_width=1, border_color=GHOST_BORDER,
                          text_color=TEXT, placeholder_text_color=MUTED_TEXT,
-                         font=ctk.CTkFont(family="Segoe UI", size=15))
+                         font=ctk.CTkFont(family="Segoe UI", size=13))
         self._round.append(e)
         return e
 
@@ -815,49 +815,51 @@ class App:
                           height=40, anchor="w", fg_color="transparent",
                           border_width=1, border_color=GHOST_BORDER,
                           text_color=TEXT, hover_color=GHOST_HOVER,
-                          font=ctk.CTkFont(family="Segoe UI", size=15))
+                          font=ctk.CTkFont(family="Segoe UI", size=13))
         self._round.append(b)
         return b
 
     def _set_status(self, text):
-        self.status.configure(text=f"●   Status:   {text}")
+        self.status.configure(text=f"Status: {text}")
 
     # ---- UI construction ---------------------------------------------
     def _build_ui(self):
         container = ctk.CTkFrame(self.root, fg_color="transparent")
-        container.pack(fill="both", expand=True, padx=16, pady=12)
+        container.pack(fill="both", expand=True, padx=14, pady=10)
+        container.grid_columnconfigure(0, weight=1)
+        container.grid_rowconfigure(1, weight=1)
 
         # Header (transparent -> same background as the body, also in dark mode)
         header = ctk.CTkFrame(container, fg_color="transparent")
-        header.pack(fill="x", pady=(0, 8))
-        ctk.CTkLabel(header, text=f"\U0001F511  {__app_name__}",
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        ctk.CTkLabel(header, text=__app_name__,
                      text_color=TEXT,
-                     font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold")
+                     font=ctk.CTkFont(family="Segoe UI", size=19, weight="bold")
                      ).pack(side="left")
         ctk.CTkLabel(header, text=f"  Password Recovery  ·  v{__version__}",
                      text_color=("#5b6472", "#a8b0bd"),
                      font=ctk.CTkFont(family="Segoe UI", size=12)).pack(
             side="left", pady=(6, 0))
         self.settings_btn = ctk.CTkButton(
-            header, text="⚙  Settings", width=110, height=34,
+            header, text="Settings", width=104, height=32,
             corner_radius=self.R, command=self.open_settings,
             fg_color="transparent", border_width=1, border_color=GHOST_BORDER,
             text_color=TEXT, hover_color=GHOST_HOVER,
-            font=ctk.CTkFont(family="Segoe UI", size=13))
+            font=ctk.CTkFont(family="Segoe UI", size=12))
         self.settings_btn.pack(side="right")
         self._round.append(self.settings_btn)
         self.theme_btn = ctk.CTkButton(
-            header, text="☀", width=42, height=34, corner_radius=self.R,
+            header, text="Theme", width=70, height=32, corner_radius=self.R,
             command=self.toggle_theme, fg_color="transparent", border_width=1,
             border_color=GHOST_BORDER, text_color=TEXT, hover_color=GHOST_HOVER,
-            font=ctk.CTkFont(family="Segoe UI", size=14))
+            font=ctk.CTkFont(family="Segoe UI", size=12))
         self.theme_btn.pack(side="right", padx=(0, 8))
         self._round.append(self.theme_btn)
         self._refresh_theme_button()
 
-        # Body: left column (inputs/options/actions) + right column (utilities)
+        # Body: left column (inputs/options) + right column (actions)
         body = ctk.CTkFrame(container, fg_color="transparent")
-        body.pack(fill="both", expand=True)
+        body.grid(row=1, column=0, sticky="nsew")
         body.grid_columnconfigure(0, weight=1)
         body.grid_columnconfigure(1, weight=0)
         body.grid_rowconfigure(0, weight=1)
@@ -869,25 +871,24 @@ class App:
 
         self._build_inputs_card(left)
         self._build_options_card(left)
-        self._build_action_card(left)
         self._build_utilities_card(right)
         self._build_status_card(container)
 
     def _build_inputs_card(self, parent):
         card = self._card(parent)
-        card.pack(fill="x", pady=(0, 12))
-        pad = {"padx": 18}
+        card.pack(fill="x", pady=(0, 8))
+        pad = {"padx": 16}
 
         ctk.CTkLabel(card, text="Locked document (full path)", anchor="w",
                      text_color=TEXT,
                      font=ctk.CTkFont(family="Segoe UI", size=13)).pack(
-            fill="x", pady=(16, 4), **pad)
+            fill="x", pady=(12, 3), **pad)
         row = ctk.CTkFrame(card, fg_color="transparent")
         row.pack(fill="x", **pad)
         self._entry(row, self.doc_var, "Select a locked Word / Excel / "
                     "PowerPoint / PDF document...").pack(
             side="left", fill="x", expand=True)
-        b = ctk.CTkButton(row, text="□  Browse", width=110, height=38,
+        b = ctk.CTkButton(row, text="Browse", width=98, height=34,
                           corner_radius=self.R, command=self.pick_doc,
                           fg_color="transparent", border_width=1,
                           border_color=GHOST_BORDER, text_color=TEXT,
@@ -899,12 +900,12 @@ class App:
         ctk.CTkLabel(card, text="Wordlist (optional - leave empty for built-in)",
                      anchor="w", text_color=TEXT,
                      font=ctk.CTkFont(family="Segoe UI", size=13)).pack(
-            fill="x", pady=(12, 4), **pad)
+            fill="x", pady=(8, 3), **pad)
         row2 = ctk.CTkFrame(card, fg_color="transparent")
         row2.pack(fill="x", **pad)
         self._entry(row2, self.wl_var, "Select wordlist file (optional)...").pack(
             side="left", fill="x", expand=True)
-        b2 = ctk.CTkButton(row2, text="□  Browse", width=110, height=38,
+        b2 = ctk.CTkButton(row2, text="Browse", width=98, height=34,
                            corner_radius=self.R, command=self.pick_wl,
                            fg_color="transparent", border_width=1,
                            border_color=GHOST_BORDER, text_color=TEXT,
@@ -914,12 +915,12 @@ class App:
         self._round.append(b2)
 
         row3 = ctk.CTkFrame(card, fg_color="transparent")
-        row3.pack(fill="x", pady=(14, 16), **pad)
+        row3.pack(fill="x", pady=(10, 12), **pad)
         ctk.CTkLabel(row3, text="If no wordlist, try PINs up to this many digits:"
                      , text_color=TEXT,
                      font=ctk.CTkFont(family="Segoe UI", size=13)).pack(side="left")
         self.digits_menu = ctk.CTkOptionMenu(
-            row3, width=72, height=34, corner_radius=self.R, variable=self.digits_var,
+            row3, width=68, height=32, corner_radius=self.R, variable=self.digits_var,
             values=[str(i) for i in range(1, 13)], fg_color=FIELD_FG,
             button_color=BLUE, button_hover_color=BLUE_HOVER,
             text_color=TEXT, dropdown_fg_color=CARD_FG,
@@ -930,9 +931,9 @@ class App:
 
     def _build_options_card(self, parent):
         card = self._card(parent)
-        card.pack(fill="x", pady=(0, 12))
-        self._section_title(card, "⚙  Options").pack(
-            fill="x", padx=18, pady=(14, 4))
+        card.pack(fill="x", pady=(0, 8))
+        self._section_title(card, "Options").pack(
+            fill="x", padx=16, pady=(10, 2))
         for var, text in [
             (self.mut_var, "Variants (caps, numbers, years, symbols, leet)"),
             (self.dates_var, f"Word + date patterns ({DATE_YEAR_START}-{DATE_YEAR_END})"),
@@ -945,116 +946,117 @@ class App:
                             checkmark_color=("#ffffff", "#ffffff"),
                             text_color=TEXT,
                             font=ctk.CTkFont(family="Segoe UI", size=13)).pack(
-                fill="x", padx=20, pady=6)
-        ctk.CTkLabel(card, text="").pack(pady=2)
-
-    def _build_action_card(self, parent):
-        card = self._card(parent)
-        card.pack(fill="x")
-        row = ctk.CTkFrame(card, fg_color="transparent")
-        row.pack(fill="x", padx=18, pady=16)
-        self.start_btn = ctk.CTkButton(
-            row, text="▻  Start Unlocking", height=46,
-            corner_radius=self.R,
-            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"), command=self.start,
-            fg_color=BLUE, hover_color=BLUE_HOVER,
-            border_width=1, border_color=BLUE_BORDER)
-        self.start_btn.pack(side="left", fill="x", expand=True)
-        self._round.append(self.start_btn)
-        self.stop_btn = ctk.CTkButton(
-            row, text="■  Stop", width=130, height=46, corner_radius=self.R,
-            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"), command=self.stop,
-            state="disabled", fg_color="transparent", border_width=1,
-            border_color=GHOST_BORDER, text_color=TEXT,
-            hover_color=GHOST_HOVER)
-        self.stop_btn.pack(side="left", padx=(10, 0))
-        self._round.append(self.stop_btn)
+                fill="x", padx=18, pady=3)
 
     def _build_utilities_card(self, parent):
         card = self._card(parent)
         card.pack(fill="both", expand=True)
-        self._section_title(card, "\U0001F527  Utilities").pack(
+        self._section_title(card, "Actions").pack(
             fill="x", padx=16, pady=(14, 8))
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.pack(fill="both", padx=14, pady=(0, 14))
-        W = 250
+        W = 232
 
-        self.gpu_btn = self._ghost_button(inner, "↥   Export for GPU (Hashcat)",
+        self.gpu_btn = self._ghost_button(inner, "Export for GPU (Hashcat)",
                                           self.export_gpu)
         self.gpu_btn.configure(width=W, fg_color=BLUE_SOFT, border_color=BLUE_BORDER,
                                text_color=("#0f56a6", "#7ab8ff"))
         self.gpu_btn.pack(fill="x", pady=4)
-        self.hc_btn = self._ghost_button(inner, "⇩   Get Hashcat",
+        self.hc_btn = self._ghost_button(inner, "Get Hashcat",
                                          self.get_hashcat)
         self.hc_btn.configure(width=W); self.hc_btn.pack(fill="x", pady=4)
-        self.test_btn = self._ghost_button(inner, "▣   Test GPU",
+        self.test_btn = self._ghost_button(inner, "Test GPU",
                                            self.test_gpu)
         self.test_btn.configure(width=W); self.test_btn.pack(fill="x", pady=4)
 
         self.run_btn = ctk.CTkButton(
-            inner, text="▻   Run Hashcat now", width=W, height=44,
+            inner, text="Run Hashcat now", width=W, height=40,
             corner_radius=self.R, anchor="w", command=self.run_hashcat,
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             fg_color=PURPLE, hover_color=PURPLE_HOVER,
             border_width=1, border_color=PURPLE_BORDER)
         self.run_btn.pack(fill="x", pady=4)
         self._round.append(self.run_btn)
         self.bf_btn = ctk.CTkButton(
-            inner, text="ϟ   GPU brute-force (all combos)", width=W, height=44,
+            inner, text="GPU brute-force (all combos)", width=W, height=40,
             corner_radius=self.R, anchor="w", command=self.run_gpu_bruteforce,
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             fg_color=PURPLE, hover_color=PURPLE_HOVER,
             border_width=1, border_color=PURPLE_BORDER)
         self.bf_btn.pack(fill="x", pady=4)
         self._round.append(self.bf_btn)
 
         self.unlock_btn = self._ghost_button(
-            inner, "▢   Unlock with known password", self.unlock_known)
+            inner, "Unlock with known password", self.unlock_known)
         self.unlock_btn.configure(width=W); self.unlock_btn.pack(fill="x", pady=4)
 
+        sep = ctk.CTkFrame(inner, height=1, fg_color=GHOST_BORDER)
+        sep.pack(fill="x", pady=(12, 10))
+
+        self.start_btn = ctk.CTkButton(
+            inner, text="Start Unlocking", width=W, height=42,
+            corner_radius=self.R, command=self.start,
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            fg_color=BLUE, hover_color=BLUE_HOVER,
+            border_width=1, border_color=BLUE_BORDER)
+        self.start_btn.pack(fill="x", pady=4)
+        self._round.append(self.start_btn)
+        self.stop_btn = ctk.CTkButton(
+            inner, text="Stop", width=W, height=42, corner_radius=self.R,
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"), command=self.stop,
+            state="disabled", fg_color="transparent", border_width=1,
+            border_color=GHOST_BORDER, text_color=TEXT,
+            hover_color=GHOST_HOVER)
+        self.stop_btn.pack(fill="x", pady=4)
+        self._round.append(self.stop_btn)
+
     def _build_status_card(self, parent):
-        card = self._card(parent)
-        card.pack(fill="x", pady=(12, 0))
-        self._section_title(card, "⌁  Progress & Status").pack(
-            fill="x", padx=18, pady=(12, 8))
+        card = self._card(parent, height=128)
+        card.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        card.pack_propagate(False)
+        self._section_title(card, "Progress & Status").pack(
+            fill="x", padx=16, pady=(10, 6))
         prow = ctk.CTkFrame(card, fg_color="transparent")
-        prow.pack(fill="x", padx=18, pady=(0, 12))
+        prow.pack(fill="x", padx=16, pady=(0, 10))
         self.progress = ctk.CTkProgressBar(
-            prow, height=16, corner_radius=self.R, fg_color=PROGRESS_BG,
+            prow, height=12, corner_radius=self.R, fg_color=PROGRESS_BG,
             progress_color=BLUE)
         self.progress.set(0)
         self.progress.pack(side="left", fill="x", expand=True)
         self._round.append(self.progress)
         self.progress_pct = ctk.CTkLabel(
             prow, text="0%", width=42, text_color=("#4b5563", "#e5e7eb"),
-            font=ctk.CTkFont(family="Segoe UI", size=16))
+            font=ctk.CTkFont(family="Segoe UI", size=13))
         self.progress_pct.pack(side="left", padx=(14, 0))
 
-        row = ctk.CTkFrame(card, fg_color=STATUS_FG, corner_radius=self.R,
+        row = ctk.CTkFrame(card, height=34, fg_color=STATUS_FG, corner_radius=self.R,
                            border_width=1, border_color=GHOST_BORDER)
-        row.pack(fill="x", padx=18, pady=(0, 14))
+        row.pack(fill="x", padx=16, pady=(0, 12))
+        row.pack_propagate(False)
         self._round.append(row)
-        row.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="status")
 
-        self.status = ctk.CTkLabel(row, text="●   Status:   Idle",
+        self.status = ctk.CTkLabel(row, text="Status: Idle",
                                    text_color=BLUE, anchor="w",
-                                   font=ctk.CTkFont(family="Segoe UI", size=13))
-        self.status.grid(row=0, column=0, sticky="ew", padx=(16, 12), pady=12)
-        for col in (1, 2, 3):
-            sep = ctk.CTkFrame(row, width=1, fg_color=GHOST_BORDER)
-            sep.grid(row=0, column=col, sticky="nsw", pady=12)
+                                   font=ctk.CTkFont(family="Segoe UI", size=12))
+        self.status.pack(side="left", fill="x", expand=True, padx=(14, 10))
         self.tries_lbl = ctk.CTkLabel(row, text="Tries: 0",
                                       text_color=TEXT, anchor="w",
-                                      font=ctk.CTkFont(family="Segoe UI", size=13))
-        self.tries_lbl.grid(row=0, column=1, sticky="ew", padx=(18, 12), pady=12)
+                                      font=ctk.CTkFont(family="Segoe UI", size=12))
+        ctk.CTkFrame(row, width=1, fg_color=GHOST_BORDER).pack(
+            side="left", fill="y", pady=8)
+        self.tries_lbl.pack(side="left", fill="x", expand=True, padx=(14, 10))
         self.speed_lbl = ctk.CTkLabel(row, text="Speed: -", text_color=TEXT,
                                       anchor="w",
-                                      font=ctk.CTkFont(family="Segoe UI", size=13))
-        self.speed_lbl.grid(row=0, column=2, sticky="ew", padx=(18, 12), pady=12)
+                                      font=ctk.CTkFont(family="Segoe UI", size=12))
+        ctk.CTkFrame(row, width=1, fg_color=GHOST_BORDER).pack(
+            side="left", fill="y", pady=8)
+        self.speed_lbl.pack(side="left", fill="x", expand=True, padx=(14, 10))
         self.eta_lbl = ctk.CTkLabel(row, text="Est. time left: -", text_color=TEXT,
                                     anchor="w",
-                                    font=ctk.CTkFont(family="Segoe UI", size=13))
-        self.eta_lbl.grid(row=0, column=3, sticky="ew", padx=(18, 12), pady=12)
+                                    font=ctk.CTkFont(family="Segoe UI", size=12))
+        ctk.CTkFrame(row, width=1, fg_color=GHOST_BORDER).pack(
+            side="left", fill="y", pady=8)
+        self.eta_lbl.pack(side="left", fill="x", expand=True, padx=(14, 10))
 
     # ---- settings dialog ---------------------------------------------
     def open_settings(self):
@@ -1191,7 +1193,7 @@ class App:
             mode = self.settings.get("theme", "System")
             if mode == "System":
                 mode = ctk.get_appearance_mode()
-            self.theme_btn.configure(text="☾" if mode == "Light" else "☀")
+            self.theme_btn.configure(text="Dark" if mode == "Light" else "Light")
         except Exception:
             pass
 

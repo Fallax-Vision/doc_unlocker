@@ -10,21 +10,26 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.view.WindowCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -45,24 +50,29 @@ private fun lightScheme() = lightColorScheme(
     surfaceVariant = Color(0xFFE5E9F2)
 )
 
+// Theme modes: 0 = System, 1 = Light, 2 = Dark
 class MainActivity : ComponentActivity() {
     @Volatile private var stopFlag = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        WindowCompat.setDecorFitsSystemWindows(window, true)
         setContent {
-            val dark = isSystemInDarkTheme()
+            var themeMode by rememberSaveable { mutableStateOf(0) }
+            val dark = when (themeMode) {
+                1 -> false
+                2 -> true
+                else -> isSystemInDarkTheme()
+            }
             MaterialTheme(colorScheme = if (dark) darkScheme() else lightScheme()) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    AppScreen()
+                    AppScreen(themeMode) { themeMode = it }
                 }
             }
         }
     }
 
     @Composable
-    private fun AppScreen() {
+    private fun AppScreen(themeMode: Int, onThemeChange: (Int) -> Unit) {
         val scope = rememberCoroutineScope()
         var fileBytes by remember { mutableStateOf<ByteArray?>(null) }
         var fileName by remember { mutableStateOf("") }
@@ -72,6 +82,7 @@ class MainActivity : ComponentActivity() {
         var progress by remember { mutableStateOf(0f) }
         var status by remember { mutableStateOf("Idle") }
         var tries by remember { mutableStateOf(0L) }
+        var showSettings by remember { mutableStateOf(false) }
 
         val picker = rememberLauncherForActivityResult(
             ActivityResultContracts.OpenDocument()
@@ -100,11 +111,8 @@ class MainActivity : ComponentActivity() {
             scope.launch {
                 val res = withContext(Dispatchers.Default) {
                     if (!Cracker.isEncrypted(data)) return@withContext "notenc"
-                    // known password first
-                    if (knownPw.isNotEmpty()) {
-                        val p = Cracker.unlock(data, knownPw)
-                        if (p != null) return@withContext "ok:$knownPw"
-                    }
+                    if (knownPw.isNotEmpty() && Cracker.unlock(data, knownPw) != null)
+                        return@withContext "ok:$knownPw"
                     val total = Cracker.estimate(maxDigits).coerceAtLeast(1)
                     var n = 0L
                     for (cand in Cracker.candidates(maxDigits)) {
@@ -124,7 +132,7 @@ class MainActivity : ComponentActivity() {
                     res.startsWith("ok:") -> {
                         val pw = res.removePrefix("ok:")
                         val plain = withContext(Dispatchers.Default) { Cracker.unlock(data, pw) }
-                        progress = 1f; tries = tries
+                        progress = 1f
                         onResult(pw, plain)
                     }
                     else -> finishRun("Error.")
@@ -132,23 +140,40 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        if (showSettings) {
+            SettingsDialog(themeMode, onThemeChange) { showSettings = false }
+        }
+
         val scroll = rememberScrollState()
         Column(
-            Modifier.fillMaxSize().verticalScroll(scroll).padding(16.dp),
+            Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.systemBars)   // stay clear of status/nav bars
+                .verticalScroll(scroll)
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Header
+            // Header: app icon + title on the left, theme + settings on the right.
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("🔑", fontSize = 26.sp)
-                Spacer(Modifier.width(8.dp))
-                Column {
+                Image(
+                    painter = painterResource(R.mipmap.ic_launcher),
+                    contentDescription = "Doc Unlocker",
+                    modifier = Modifier.size(40.dp).clip(RoundedCornerShape(10.dp))
+                )
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
                     Text("Doc Unlocker", fontWeight = FontWeight.Bold, fontSize = 22.sp)
                     Text("Password Recovery · v${BuildConfig.VERSION_NAME}",
                         fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                TextButton(onClick = { onThemeChange((themeMode + 1) % 3) }) {
+                    Text(when (themeMode) { 1 -> "Light"; 2 -> "Dark"; else -> "System" })
+                }
+                IconButton(onClick = { showSettings = true }) {
+                    Icon(Icons.Filled.Settings, contentDescription = "Settings")
+                }
             }
 
-            // Document card
             Card(shape = MaterialTheme.shapes.large) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Locked document", fontWeight = FontWeight.SemiBold)
@@ -167,7 +192,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Options card
             Card(shape = MaterialTheme.shapes.large) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Options", fontWeight = FontWeight.SemiBold)
@@ -186,7 +210,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Action buttons
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(
                     onClick = { start() }, enabled = !running,
@@ -198,7 +221,6 @@ class MainActivity : ComponentActivity() {
                 ) { Text("■ Stop") }
             }
 
-            // Status card
             Card(shape = MaterialTheme.shapes.large) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Progress & Status", fontWeight = FontWeight.SemiBold)
@@ -212,9 +234,37 @@ class MainActivity : ComponentActivity() {
             }
 
             Text("Office (.docx/.xlsx/.pptx) only on Android for now. " +
-                 "Use the desktop app for PDFs.\nMIT License · Fallax Vision",
+                 "Use the desktop app for PDFs.",
                  fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+
+    @Composable
+    private fun SettingsDialog(themeMode: Int, onThemeChange: (Int) -> Unit, onClose: () -> Unit) {
+        AlertDialog(
+            onDismissRequest = onClose,
+            confirmButton = { TextButton(onClick = onClose) { Text("Close") } },
+            title = { Text("Settings") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Theme", fontWeight = FontWeight.SemiBold)
+                    listOf("System", "Light", "Dark").forEachIndexed { i, label ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = themeMode == i,
+                                onClick = { onThemeChange(i) })
+                            Text(label)
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text("About", fontWeight = FontWeight.SemiBold)
+                    Text("Doc Unlocker  v${BuildConfig.VERSION_NAME}\n" +
+                         "License: MIT (free to use, modify, sell)\n" +
+                         "Author: Fallax Vision and contributors\n\n" +
+                         "Office (.docx/.xlsx/.pptx) only on Android for now.",
+                         fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        )
     }
 
     private fun queryName(uri: Uri): String {

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base activity theme; Compose draws all UI, so this only covers the
+         brief window background before Compose attaches. No splash screen. -->
+    <style name="Theme.DocUnlocker" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

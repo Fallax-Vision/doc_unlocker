@@ -7,8 +7,8 @@
 **Recover the password of a Microsoft Office or PDF document _you own_ - with a friendly GUI, smart guessing, and optional GPU acceleration.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.2-success.svg)](CHANGELOG.md)
-[![Platform](https://img.shields.io/badge/platform-Windows-informational.svg)](#installation)
+[![Version](https://img.shields.io/badge/version-1.0.3-success.svg)](CHANGELOG.md)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-informational.svg)](#installation)
 [![Python](https://img.shields.io/badge/python-3.10%2B-yellow.svg)](https://www.python.org/)
 
 </div>
@@ -86,11 +86,13 @@ both light and dark themes.
 
 ## Installation
 
-### Option A - Download the ready-made `.exe` (easiest, Windows)
+### Option A - Download the ready-made build (easiest)
 
 1. Go to the [Releases](../../releases) page.
-2. Download `DocUnlocker.exe` from the latest release.
-3. Double-click it. (No Python needed.)
+2. Download the latest asset for your platform:
+   - **Windows:** `DocUnlocker-vX.Y.Z.exe` (double-click; no Python needed).
+   - **Android:** `DocUnlocker-vX.Y.Z.apk` (enable "install unknown apps", then
+     open the APK). Barebone build - Office files only for now.
 
 ### Option B - Run from source (Windows)
 

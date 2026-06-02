@@ -1,9 +1,11 @@
 name: Build and Release
 
-# Publishes a GitHub Release with the Windows .exe AUTOMATICALLY whenever the
-# version in doc_unlocker.py changes on main. It also runs on a pushed version
-# tag, or manually. A release is only created if one does not already exist for
-# the current __version__, so ordinary commits never create duplicate releases.
+# Publishes a GitHub Release with the Windows .exe AND the Android .apk
+# AUTOMATICALLY whenever the version in doc_unlocker.py changes on main.
+# It also runs on a pushed version tag, or manually. A release is only created
+# if one does not already exist for the current __version__, so ordinary
+# commits never create duplicate releases. All assets carry the version in
+# their filename (DocUnlocker-vX.Y.Z.exe / .apk).
 
 on:
   push:
@@ -15,22 +17,24 @@ permissions:
   contents: write          # needed to create the Release and upload assets
 
 jobs:
-  release:
+  windows-exe:
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.ver.outputs.tag }}
+      exists: ${{ steps.check.outputs.exists }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Read version from doc_unlocker.py
+      - name: Read version
         id: ver
         shell: bash
         run: |
           V=$(python -c "import re;print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('doc_unlocker.py', encoding='utf-8').read()).group(1))")
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "tag=v$V" >> "$GITHUB_OUTPUT"
-          echo "Detected version: $V"
 
-      - name: Check whether this release already exists
+      - name: Does this release already exist?
         id: check
         shell: bash
         env:
@@ -38,10 +42,8 @@ jobs:
         run: |
           if gh release view "v${{ steps.ver.outputs.version }}" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Release v${{ steps.ver.outputs.version }} already exists - skipping."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "Release v${{ steps.ver.outputs.version }} is new - will build and publish."
           fi
 
       - name: Set up Python
@@ -54,9 +56,9 @@ jobs:
         if: steps.check.outputs.exists == 'false'
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pyinstaller msoffcrypto-tool olefile
+          python -m pip install pyinstaller msoffcrypto-tool olefile pypdf customtkinter
 
-      - name: Install UPX (smaller .exe)
+      - name: Install UPX
         if: steps.check.outputs.exists == 'false'
         run: choco install upx -y
 
@@ -73,4 +75,42 @@ jobs:
           body_path: CHANGELOG.md
           draft: false
           prerelease: false
-          files: dist/DocUnlocker.exe
+          files: dist/DocUnlocker-v${{ steps.ver.outputs.version }}.exe
+
+  android-apk:
+    needs: windows-exe
+    if: needs.windows-exe.outputs.exists == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: |
+          sdkmanager "platforms;android-36" "build-tools;36.1.0" "platform-tools"
+
+      - name: Build the APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Rename APK with version
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/debug/app-debug.apk \
+             "out/DocUnlocker-v${{ needs.windows-exe.outputs.version }}.apk"
+
+      - name: Attach APK to the Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.windows-exe.outputs.tag }}
+          files: out/DocUnlocker-v${{ needs.windows-exe.outputs.version }}.apk

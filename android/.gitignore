@@ -1,0 +1,17 @@
+# Android / Gradle build artefacts
+.gradle/
+build/
+app/build/
+local.properties
+*.iml
+.idea/
+captures/
+.cxx/
+
+# Keystores must never be committed
+*.jks
+*.keystore
+
+# JVM test scratch (engine verification)
+_jvmtest/out/
+_jvmtest/*.xlsx

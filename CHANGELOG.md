@@ -4,6 +4,26 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.3] - 2026-06-02
+
+### Added
+
+- **Android app (APK).** A barebone Android build with a matching look
+  (rounded Material 3 cards, blue/purple accents, light/dark following the
+  system, the same key icon, no splash screen, laid out vertically for
+  phones). It recovers passwords for **Office 2013+** files
+  (`.docx`/`.xlsx`/`.pptx`) via a pure-Java agile-encryption engine
+  (AES + SHA-512), with a known-password field, a built-in wordlist, and a
+  numeric-PIN sweep; the unlocked copy is saved to Downloads. PDF and the GPU
+  path remain desktop-only for now.
+- Release assets now include `DocUnlocker-vX.Y.Z.apk` alongside the `.exe`,
+  built automatically by CI.
+
+### Changed
+
+- All release artefacts carry the version in their filename
+  (`DocUnlocker-vX.Y.Z.exe` / `.apk`).
+
 ## [1.0.2] - 2026-06-02
 
 ### Changed

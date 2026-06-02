@@ -6,7 +6,7 @@ Usage:
     py -m pip install --user pyinstaller
     py build_exe.py
 
-Result:  dist/WordUnlocker-v1.0.2.exe   (git-ignored; ship as a Release asset)
+Result:  dist/DocUnlocker-v1.0.2.exe   (git-ignored; ship as a Release asset)
 
 Size: the build excludes large libraries that aren't used and enables UPX
 compression when a `upx` executable is available (on PATH, or in tools/upx/).
@@ -45,7 +45,7 @@ def main():
         src = f.read()
     match = re.search(r'^__version__\s*=\s*"([^"]+)"', src, re.MULTILINE)
     version = match.group(1) if match else "unknown"
-    exe_name = f"WordUnlocker-v{version}"
+    exe_name = f"DocUnlocker-v{version}"
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--onefile", "--windowed",

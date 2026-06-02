@@ -450,6 +450,12 @@ def extract_office_hash(doc_path):
 _OFFICE_MAGIC = (b"PK\x03\x04", b"\xd0\xcf\x11\xe0")
 
 
+SUPPORTED_EXTS = {
+    ".docx", ".docm", ".doc", ".xlsx", ".xlsm", ".xls",
+    ".pptx", ".pptm", ".ppt", ".pdf",
+}
+
+
 def detect_kind(path):
     """Return 'pdf' or 'office' based on the file extension."""
     return "pdf" if os.path.splitext(path)[1].lower() == ".pdf" else "office"
@@ -1319,8 +1325,14 @@ class App:
         if wl and not os.path.isfile(wl):
             messagebox.showerror("Error", "The wordlist path is not a valid file.")
             return
+        # Pre-check: supported + actually encrypted. proceed=False -> cancel;
+        # forced=True -> user chose Continue on an unsupported/unencrypted file.
+        proceed, forced = self._precheck_document(doc)
+        if not proceed:
+            self._set_status("Cancelled.")
+            return
         hc = find_hashcat()
-        if hc and detect_kind(doc) != "pdf":
+        if not forced and hc and detect_kind(doc) != "pdf":
             self._begin_gpu_run()
             self._set_status("GPU available. Starting Hashcat...")
             self.hc_run_thread = threading.Thread(
@@ -1341,9 +1353,70 @@ class App:
         self.worker = threading.Thread(
             target=self.run_crack,
             args=(doc, wl or None, int(self.digits_var.get()), self.mut_var.get(),
-                  self.two_var.get(), self.dates_var.get()), daemon=True)
+                  self.two_var.get(), self.dates_var.get(), forced), daemon=True)
         self.worker.start()
         self.ensure_pump()
+
+    def _precheck_document(self, doc):
+        """Returns (proceed, forced). Warns (with Cancel/Continue) if the file
+        is an unsupported type or doesn't appear encrypted."""
+        ext = os.path.splitext(doc)[1].lower()
+        kind = detect_kind(doc)
+        if ext not in SUPPORTED_EXTS:
+            return (self._confirm_unencrypted(kind, unsupported=True), True)
+        try:
+            with open(doc, "rb") as f:
+                head = f.read()
+        except Exception as exc:
+            messagebox.showerror("Error", str(exc))
+            return (False, False)
+        if is_protected(head, kind):
+            return (True, False)
+        return (self._confirm_unencrypted(kind, unsupported=False), True)
+
+    def _confirm_unencrypted(self, kind, unsupported=False):
+        """Modal warning with 'OK, Cancel' and 'Continue'. Returns True to go on."""
+        if unsupported:
+            msg = ("Unsupported file type. Doc Unlocker handles Word, Excel, "
+                   "PowerPoint and PDF. Open it in an app built for this format "
+                   "first.\n\nContinue with the password guess anyway?")
+        elif kind == "pdf":
+            msg = ("This PDF doesn't look encrypted. Try opening it first in "
+                   "Acrobat Reader, your web browser (Chrome/Edge), or "
+                   "SumatraPDF – it may open with no password.\n\n"
+                   "Continue with the password guess anyway?")
+        else:
+            msg = ("This file doesn't look encrypted. Try opening it first in "
+                   "Word / Excel / PowerPoint, LibreOffice, Google Docs, or WPS "
+                   "Office – it may open with no password.\n\n"
+                   "Continue with the password guess anyway?")
+        win = ctk.CTkToplevel(self.root)
+        win.title("Heads up")
+        win.transient(self.root)
+        win.geometry("470x250")
+        win.after(150, win.grab_set)
+        result = {"v": False}
+        ctk.CTkLabel(win, text=msg, wraplength=430, justify="left").pack(
+            padx=20, pady=(22, 16), anchor="w")
+        row = ctk.CTkFrame(win, fg_color="transparent")
+        row.pack(pady=6)
+
+        def cancel():
+            result["v"] = False
+            win.destroy()
+
+        def cont():
+            result["v"] = True
+            win.destroy()
+
+        ctk.CTkButton(row, text="OK, Cancel", command=cancel, width=150).pack(
+            side="left", padx=8)
+        ctk.CTkButton(row, text="Continue", command=cont, width=150,
+                      fg_color="#b45309", hover_color="#92400e").pack(
+            side="left", padx=8)
+        win.protocol("WM_DELETE_WINDOW", cancel)
+        self.root.wait_window(win)
+        return result["v"]
 
     def stop(self):
         self.stop_flag.set()
@@ -1355,12 +1428,12 @@ class App:
                 pass
 
     def run_crack(self, doc_path, wordlist, digit_len, use_mutations,
-                  use_twoword, use_dates):
+                  use_twoword, use_dates, force=False):
         try:
             with open(doc_path, "rb") as f:
                 file_bytes = f.read()
             doc_kind = detect_kind(doc_path)
-            if not is_protected(file_bytes, doc_kind):
+            if not force and not is_protected(file_bytes, doc_kind):
                 self.q.put(("error", "This file is not password-protected."))
                 return
             candidates, total = build_candidates(

@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   path remain desktop-only for now.
 - Release assets now include `DocUnlocker-vX.Y.Z.apk` alongside the `.exe`,
   built automatically by CI.
+- **"Not encrypted" pre-check** (desktop and Android): before a run, the app
+  checks the file is a supported type and actually encrypted. If not, it shows
+  a concise warning suggesting apps to open the file in first, with **OK, Cancel**
+  and **Continue** buttons.
+- Expanded Android **Settings**: theme (System/Light/Dark), keep screen on
+  while scanning, vibrate when a run finishes, and an About section. Settings
+  persist between launches.
 
 ### Changed
 

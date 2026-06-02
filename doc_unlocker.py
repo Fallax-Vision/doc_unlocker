@@ -13,13 +13,13 @@ use it on documents you are not authorised to access.
 Project: https://github.com/Fallax-Vision/doc_unlocker
 License: MIT
 
-Note: currently focused on Word documents; future versions will add PDF, Excel,
-PowerPoint and other document types.
+Supports Microsoft Word, Excel and PowerPoint (.docx / .xlsx / .pptx, plus
+legacy and macro-enabled variants) and PDF documents.
 """
 
 from __future__ import annotations
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 __app_name__ = "Doc Unlocker"
 
 import io
@@ -992,10 +992,15 @@ class App:
     def pick_doc(self):
         path = filedialog.askopenfilename(
             title="Select the locked document",
-            filetypes=[("Documents", "*.docx *.xlsx *.pptx *.doc *.xls *.ppt *.pdf"),
-                       ("PDF files", "*.pdf"),
-                       ("Office documents", "*.docx *.xlsx *.pptx *.doc *.xls *.ppt"),
-                       ("All files", "*.*")])
+            filetypes=[
+                ("All supported documents",
+                 "*.docx *.docm *.xlsx *.xlsm *.pptx *.pptm "
+                 "*.doc *.xls *.ppt *.pdf"),
+                ("Word documents", "*.docx *.docm *.doc"),
+                ("Excel workbooks", "*.xlsx *.xlsm *.xls"),
+                ("PowerPoint presentations", "*.pptx *.pptm *.ppt"),
+                ("PDF files", "*.pdf"),
+                ("All files", "*.*")])
         if path:
             self.doc_var.set(path)
 

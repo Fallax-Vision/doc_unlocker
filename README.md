@@ -7,7 +7,7 @@
 **Recover the password of a Microsoft Office or PDF document _you own_ - with a friendly GUI, smart guessing, and optional GPU acceleration.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.1-success.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.2-success.svg)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-Windows-informational.svg)](#installation)
 [![Python](https://img.shields.io/badge/python-3.10%2B-yellow.svg)](https://www.python.org/)
 
@@ -29,8 +29,9 @@ responsible for how you use this software. See the [MIT License](LICENSE).
 You point it at a password-protected document and it tries to find the
 password so it can produce an **unlocked copy** (`Unlocked_<yourfile>`).
 
-**Supported files:** Microsoft Office (`.docx`, `.xlsx`, `.pptx`, and legacy
-`.doc`/`.xls`/`.ppt`) and **PDF** (`.pdf`).
+**Supported files:** Microsoft **Word** (`.docx`/`.docm`/`.doc`), **Excel**
+(`.xlsx`/`.xlsm`/`.xls`), **PowerPoint** (`.pptx`/`.pptm`/`.ppt`), and **PDF**
+(`.pdf`).
 
 It works on two levels.
 

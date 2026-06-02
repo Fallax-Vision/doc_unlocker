@@ -4,6 +4,22 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] - 2026-06-02
+
+### Added
+
+- **Explicit Excel and PowerPoint support.** Encrypted `.xlsx`/`.xlsm` and
+  `.pptx`/`.pptm` files are now first-class: dedicated entries in the file
+  picker and documented support. They use the same proven Office engine as
+  Word (CPU smart-guessing, GPU hash extraction, and *Unlock with known
+  password*), verified end-to-end on a real encrypted workbook.
+
+### Fixed
+
+- The portable `.exe` now shows the app's key icon in the Windows taskbar
+  (explicit AppUserModelID + `iconbitmap(default=...)`), instead of the
+  generic Tk icon.
+
 ## [1.0.1] - 2026-06-02
 
 ### Added

@@ -711,6 +711,19 @@ GHOST_BORDER = ("#e6ebf1", "#202b39")
 PROGRESS_BG = ("#e5e7eb", "#202b36")
 WARNING = ("#b45309", "#f59e0b")
 
+# Windows built-in icon glyphs from Segoe MDL2 Assets.
+ICO_BROWSE = "\ue8b7"
+ICO_EXPORT = "\ue898"
+ICO_DOWNLOAD = "\ue896"
+ICO_GPU = "\ue7f4"
+ICO_RUN = "\ue768"
+ICO_LOCK = "\ue72e"
+ICO_MORE = "\ue712"
+ICO_START = "\ue768"
+ICO_STOP = "\ue71a"
+ICO_SETTINGS = "\ue713"
+ICO_THEME = "\ue706"
+
 
 # ===========================================================================
 #  GUI  (CustomTkinter)
@@ -841,7 +854,7 @@ class App:
                      font=ctk.CTkFont(family="Segoe UI", size=12)).pack(
             side="left", pady=(6, 0))
         self.settings_btn = ctk.CTkButton(
-            header, text="Settings", width=104, height=32,
+            header, text=f"{ICO_SETTINGS}  Settings", width=112, height=32,
             corner_radius=self.R, command=self.open_settings,
             fg_color="transparent", border_width=1, border_color=GHOST_BORDER,
             text_color=TEXT, hover_color=GHOST_HOVER,
@@ -849,7 +862,7 @@ class App:
         self.settings_btn.pack(side="right")
         self._round.append(self.settings_btn)
         self.theme_btn = ctk.CTkButton(
-            header, text="Theme", width=70, height=32, corner_radius=self.R,
+            header, text="Theme", width=78, height=32, corner_radius=self.R,
             command=self.toggle_theme, fg_color="transparent", border_width=1,
             border_color=GHOST_BORDER, text_color=TEXT, hover_color=GHOST_HOVER,
             font=ctk.CTkFont(family="Segoe UI", size=12))
@@ -888,7 +901,7 @@ class App:
         self._entry(row, self.doc_var, "Select a locked Word / Excel / "
                     "PowerPoint / PDF document...").pack(
             side="left", fill="x", expand=True)
-        b = ctk.CTkButton(row, text="Browse", width=98, height=34,
+        b = ctk.CTkButton(row, text=f"{ICO_BROWSE}  Browse", width=104, height=34,
                           corner_radius=self.R, command=self.pick_doc,
                           fg_color="transparent", border_width=1,
                           border_color=GHOST_BORDER, text_color=TEXT,
@@ -905,7 +918,7 @@ class App:
         row2.pack(fill="x", **pad)
         self._entry(row2, self.wl_var, "Select wordlist file (optional)...").pack(
             side="left", fill="x", expand=True)
-        b2 = ctk.CTkButton(row2, text="Browse", width=98, height=34,
+        b2 = ctk.CTkButton(row2, text=f"{ICO_BROWSE}  Browse", width=104, height=34,
                            corner_radius=self.R, command=self.pick_wl,
                            fg_color="transparent", border_width=1,
                            border_color=GHOST_BORDER, text_color=TEXT,
@@ -947,38 +960,41 @@ class App:
                             text_color=TEXT,
                             font=ctk.CTkFont(family="Segoe UI", size=13)).pack(
                 fill="x", padx=18, pady=3)
+        ctk.CTkFrame(card, height=12, fg_color="transparent").pack(fill="x")
 
     def _build_utilities_card(self, parent):
         card = self._card(parent)
         card.pack(fill="both", expand=True)
-        self._section_title(card, "Actions").pack(
-            fill="x", padx=16, pady=(14, 8))
+        title_row = ctk.CTkFrame(card, fg_color="transparent")
+        title_row.pack(fill="x", padx=16, pady=(14, 8))
+        self._section_title(title_row, "Actions").pack(side="left", fill="x", expand=True)
+        self.more_actions = {
+            f"{ICO_DOWNLOAD}  Get Hashcat": self.get_hashcat,
+            f"{ICO_GPU}  Test GPU": self.test_gpu,
+            f"{ICO_RUN}  Run Hashcat now": self.run_hashcat,
+        }
+        self.more_actions_menu = ctk.CTkOptionMenu(
+            title_row, width=92, height=30, corner_radius=self.R,
+            values=list(self.more_actions.keys()), command=self._run_more_action,
+            fg_color=FIELD_FG, button_color=FIELD_FG,
+            button_hover_color=GHOST_HOVER, text_color=TEXT,
+            dropdown_fg_color=CARD_FG, dropdown_hover_color=GHOST_HOVER,
+            dropdown_text_color=TEXT,
+            font=ctk.CTkFont(family="Segoe UI", size=12))
+        self.more_actions_menu.set(f"{ICO_MORE}  More")
+        self.more_actions_menu.pack(side="right")
+        self._round.append(self.more_actions_menu)
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.pack(fill="both", padx=14, pady=(0, 14))
         W = 232
 
-        self.gpu_btn = self._ghost_button(inner, "Export for GPU (Hashcat)",
+        self.gpu_btn = self._ghost_button(inner, f"{ICO_EXPORT}  Export for GPU (Hashcat)",
                                           self.export_gpu)
         self.gpu_btn.configure(width=W, fg_color=BLUE_SOFT, border_color=BLUE_BORDER,
                                text_color=("#0f56a6", "#7ab8ff"))
         self.gpu_btn.pack(fill="x", pady=4)
-        self.hc_btn = self._ghost_button(inner, "Get Hashcat",
-                                         self.get_hashcat)
-        self.hc_btn.configure(width=W); self.hc_btn.pack(fill="x", pady=4)
-        self.test_btn = self._ghost_button(inner, "Test GPU",
-                                           self.test_gpu)
-        self.test_btn.configure(width=W); self.test_btn.pack(fill="x", pady=4)
-
-        self.run_btn = ctk.CTkButton(
-            inner, text="Run Hashcat now", width=W, height=40,
-            corner_radius=self.R, anchor="w", command=self.run_hashcat,
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            fg_color=PURPLE, hover_color=PURPLE_HOVER,
-            border_width=1, border_color=PURPLE_BORDER)
-        self.run_btn.pack(fill="x", pady=4)
-        self._round.append(self.run_btn)
         self.bf_btn = ctk.CTkButton(
-            inner, text="GPU brute-force (all combos)", width=W, height=40,
+            inner, text=f"{ICO_GPU}  GPU brute-force (all combos)", width=W, height=40,
             corner_radius=self.R, anchor="w", command=self.run_gpu_bruteforce,
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             fg_color=PURPLE, hover_color=PURPLE_HOVER,
@@ -987,14 +1003,14 @@ class App:
         self._round.append(self.bf_btn)
 
         self.unlock_btn = self._ghost_button(
-            inner, "Unlock with known password", self.unlock_known)
+            inner, f"{ICO_LOCK}  Unlock with known password", self.unlock_known)
         self.unlock_btn.configure(width=W); self.unlock_btn.pack(fill="x", pady=4)
 
         sep = ctk.CTkFrame(inner, height=1, fg_color=GHOST_BORDER)
         sep.pack(fill="x", pady=(12, 10))
 
         self.start_btn = ctk.CTkButton(
-            inner, text="Start Unlocking", width=W, height=42,
+            inner, text=f"{ICO_START}  Start Unlocking", width=W, height=42,
             corner_radius=self.R, command=self.start,
             font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
             fg_color=BLUE, hover_color=BLUE_HOVER,
@@ -1002,13 +1018,19 @@ class App:
         self.start_btn.pack(fill="x", pady=4)
         self._round.append(self.start_btn)
         self.stop_btn = ctk.CTkButton(
-            inner, text="Stop", width=W, height=42, corner_radius=self.R,
+            inner, text=f"{ICO_STOP}  Stop", width=W, height=42, corner_radius=self.R,
             font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"), command=self.stop,
             state="disabled", fg_color="transparent", border_width=1,
             border_color=GHOST_BORDER, text_color=TEXT,
             hover_color=GHOST_HOVER)
         self.stop_btn.pack(fill="x", pady=4)
         self._round.append(self.stop_btn)
+
+    def _run_more_action(self, choice):
+        command = self.more_actions.get(choice)
+        self.more_actions_menu.set(f"{ICO_MORE}  More")
+        if command:
+            command()
 
     def _build_status_card(self, parent):
         card = self._card(parent, height=128)
@@ -1488,7 +1510,7 @@ class App:
                 "Download it now (~20 MB) and unpack it next to this tool?"):
             return
         self.gpu_btn.configure(state="disabled")
-        self.hc_btn.configure(state="disabled")
+        self.more_actions_menu.configure(state="disabled")
         self._set_status("Downloading Hashcat...")
         self.hc_thread = threading.Thread(target=self._get_hashcat_worker, daemon=True)
         self.hc_thread.start()
@@ -1813,8 +1835,9 @@ class App:
     def _begin_gpu_run(self):
         self.stop_flag.clear()
         self.start_btn.configure(state="disabled")
-        for b in (self.gpu_btn, self.hc_btn, self.run_btn, self.bf_btn):
+        for b in (self.gpu_btn, self.bf_btn):
             b.configure(state="disabled")
+        self.more_actions_menu.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         self._set_status("Preparing GPU run...")
 
@@ -1824,8 +1847,9 @@ class App:
 
     def _finish_hc(self):
         self.start_btn.configure(state="normal")
-        for b in (self.gpu_btn, self.hc_btn, self.run_btn, self.bf_btn):
+        for b in (self.gpu_btn, self.bf_btn):
             b.configure(state="normal")
+        self.more_actions_menu.configure(state="normal")
         self.stop_btn.configure(state="disabled")
 
     def _jobs_alive(self):
@@ -1929,7 +1953,7 @@ class App:
                         f"{done/1048576:.1f}/{total/1048576:.1f} MB")
                 elif kind == "hc_done":
                     self.gpu_btn.configure(state="normal")
-                    self.hc_btn.configure(state="normal")
+                    self.more_actions_menu.configure(state="normal")
                     self._set_status("Hashcat installed.")
                     messagebox.showinfo("Hashcat ready",
                                         f"Installed at:\n{msg[1]}\n\nNow use "
@@ -1937,7 +1961,7 @@ class App:
                     break
                 elif kind == "hc_error":
                     self.gpu_btn.configure(state="normal")
-                    self.hc_btn.configure(state="normal")
+                    self.more_actions_menu.configure(state="normal")
                     self._set_status("Hashcat download failed.")
                     messagebox.showerror("Hashcat download failed",
                                          msg[1] + "\n\nManual: https://hashcat.net/"

@@ -6,12 +6,13 @@ Usage:
     py -m pip install --user pyinstaller
     py build_exe.py
 
-Result:  dist/DocUnlocker.exe   (git-ignored; ship as a Release asset)
+Result:  dist/WordUnlocker-v1.0.2.exe   (git-ignored; ship as a Release asset)
 
 Size: the build excludes large libraries that aren't used and enables UPX
 compression when a `upx` executable is available (on PATH, or in tools/upx/).
 """
 import os
+import re
 import sys
 import shutil
 import subprocess
@@ -40,10 +41,15 @@ def find_upx_dir():
 
 
 def main():
+    with open(os.path.join(HERE, "doc_unlocker.py"), encoding="utf-8") as f:
+        src = f.read()
+    match = re.search(r'^__version__\s*=\s*"([^"]+)"', src, re.MULTILINE)
+    version = match.group(1) if match else "unknown"
+    exe_name = f"WordUnlocker-v{version}"
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--onefile", "--windowed",
-        "--name", "DocUnlocker",
+        "--name", exe_name,
         "--noconfirm", "--clean",
         # CustomTkinter ships theme JSON + fonts as data files; bundle them all
         # or the frozen exe cannot find its assets and fails to start.
@@ -70,7 +76,7 @@ def main():
 
     print("Running:", " ".join(cmd))
     subprocess.check_call(cmd, cwd=HERE)
-    out = os.path.join(HERE, "dist", "DocUnlocker.exe")
+    out = os.path.join(HERE, "dist", exe_name + ".exe")
     if os.path.isfile(out):
         print(f"\nDone -> {out}  ({os.path.getsize(out)/1048576:.1f} MB)")
 

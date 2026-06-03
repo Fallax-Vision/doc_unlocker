@@ -13,7 +13,8 @@
 
 </div>
 
----
+<img width="2449" height="1070" alt="GitHub Banner - Doc Unlocker" src="https://github.com/user-attachments/assets/da111e21-c9e1-4dce-af5b-5736f9cf3565" />
+
 
 ## Use it responsibly
 

@@ -19,7 +19,7 @@ legacy and macro-enabled variants) and PDF documents.
 
 from __future__ import annotations
 
-__version__ = "1.0.3"
+__version__ = "1.0.4"
 __app_name__ = "Doc Unlocker"
 
 import io
@@ -327,6 +327,8 @@ def build_candidates(wordlist_path, digit_len, use_mutations, use_twoword,
             yield pw
         for word in base_words:
             yield from emit(word)
+        for word in COMMON_PASSWORDS:
+            yield from emit(word)
         if use_dates:
             yield from date_combos(base_words)
         if use_twoword:
@@ -334,8 +336,6 @@ def build_candidates(wordlist_path, digit_len, use_mutations, use_twoword,
         if wordlist_path:
             for word in _read_lines(wordlist_path):
                 yield from emit(word)
-        for word in COMMON_PASSWORDS:
-            yield from emit(word)
         for n in range(1, digit_len + 1):
             for combo in itertools.product("0123456789", repeat=n):
                 yield "".join(combo)
@@ -994,6 +994,29 @@ class App:
         inner.pack(fill="both", padx=14, pady=(0, 14))
         W = 232
 
+        self.start_btn = ctk.CTkButton(
+            inner, text=f"{ICO_START}  Start Unlocking", width=W, height=42,
+            corner_radius=self.R, command=self.start,
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            fg_color=BLUE, hover_color=BLUE_HOVER,
+            border_width=1, border_color=BLUE_BORDER)
+        self.start_btn.pack(fill="x", pady=4)
+        self._round.append(self.start_btn)
+        self.unlock_btn = self._ghost_button(
+            inner, f"{ICO_LOCK}  Unlock with known password", self.unlock_known)
+        self.unlock_btn.configure(width=W); self.unlock_btn.pack(fill="x", pady=4)
+        self.stop_btn = ctk.CTkButton(
+            inner, text=f"{ICO_STOP}  Stop", width=W, height=42, corner_radius=self.R,
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"), command=self.stop,
+            state="disabled", fg_color="transparent", border_width=1,
+            border_color=GHOST_BORDER, text_color=TEXT,
+            hover_color=GHOST_HOVER)
+        self.stop_btn.pack(fill="x", pady=4)
+        self._round.append(self.stop_btn)
+
+        sep = ctk.CTkFrame(inner, height=1, fg_color=GHOST_BORDER)
+        sep.pack(fill="x", pady=(12, 10))
+
         self.gpu_btn = self._ghost_button(inner, f"{ICO_EXPORT}  Export for GPU (Hashcat)",
                                           self.export_gpu)
         self.gpu_btn.configure(width=W, fg_color=BLUE_SOFT, border_color=BLUE_BORDER,
@@ -1007,30 +1030,6 @@ class App:
             border_width=1, border_color=PURPLE_BORDER)
         self.bf_btn.pack(fill="x", pady=4)
         self._round.append(self.bf_btn)
-
-        self.unlock_btn = self._ghost_button(
-            inner, f"{ICO_LOCK}  Unlock with known password", self.unlock_known)
-        self.unlock_btn.configure(width=W); self.unlock_btn.pack(fill="x", pady=4)
-
-        sep = ctk.CTkFrame(inner, height=1, fg_color=GHOST_BORDER)
-        sep.pack(fill="x", pady=(12, 10))
-
-        self.start_btn = ctk.CTkButton(
-            inner, text=f"{ICO_START}  Start Unlocking", width=W, height=42,
-            corner_radius=self.R, command=self.start,
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-            fg_color=BLUE, hover_color=BLUE_HOVER,
-            border_width=1, border_color=BLUE_BORDER)
-        self.start_btn.pack(fill="x", pady=4)
-        self._round.append(self.start_btn)
-        self.stop_btn = ctk.CTkButton(
-            inner, text=f"{ICO_STOP}  Stop", width=W, height=42, corner_radius=self.R,
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"), command=self.stop,
-            state="disabled", fg_color="transparent", border_width=1,
-            border_color=GHOST_BORDER, text_color=TEXT,
-            hover_color=GHOST_HOVER)
-        self.stop_btn.pack(fill="x", pady=4)
-        self._round.append(self.stop_btn)
 
     def _run_more_action(self, choice):
         command = self.more_actions.get(choice)
@@ -1409,7 +1408,7 @@ class App:
             result["v"] = True
             win.destroy()
 
-        ctk.CTkButton(row, text="OK, Cancel", command=cancel, width=150).pack(
+        ctk.CTkButton(row, text="Cancel", command=cancel, width=150).pack(
             side="left", padx=8)
         ctk.CTkButton(row, text="Continue", command=cont, width=150,
                       fg_color="#b45309", hover_color="#92400e").pack(

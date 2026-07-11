@@ -4,6 +4,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.4] - 2026-07-11
+
+### Changed
+
+- Common passwords are now tried before the much larger date and two-word
+  candidate groups, substantially reducing recovery time for likely matches.
+- Desktop actions now put the primary recovery path first and group advanced
+  GPU tools separately for faster scanning and clearer decision hierarchy.
+- Android removes the duplicate theme shortcut, keeps theme selection in
+  Settings, and uses clearer warning actions with theme-aware contrast.
+
 ## [1.0.3] - 2026-06-02
 
 ### Added

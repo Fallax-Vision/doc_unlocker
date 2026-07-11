@@ -42,7 +42,6 @@ import java.io.File
 
 private val Blue = Color(0xFF3B82F6)
 private val Purple = Color(0xFF8B5CF6)
-private val Amber = Color(0xFFB45309)
 
 private fun darkScheme() = darkColorScheme(
     primary = Blue, secondary = Purple,
@@ -194,11 +193,11 @@ class MainActivity : ComponentActivity() {
                 text = { Text(msg, fontSize = 14.sp) },
                 confirmButton = {
                     TextButton(onClick = { warnKind = null; beginCrack(true) }) {
-                        Text("Continue", color = Amber)
+                        Text("Continue anyway", color = MaterialTheme.colorScheme.error)
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { warnKind = null }) { Text("OK, Cancel") }
+                    TextButton(onClick = { warnKind = null }) { Text("Cancel") }
                 }
             )
         }
@@ -220,9 +219,6 @@ class MainActivity : ComponentActivity() {
                     Text("Doc Unlocker", fontWeight = FontWeight.Bold, fontSize = 22.sp)
                     Text("Password Recovery · v${BuildConfig.VERSION_NAME}",
                         fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                TextButton(onClick = { onThemeChange((themeMode + 1) % 3) }) {
-                    Text(when (themeMode) { 1 -> "Light"; 2 -> "Dark"; else -> "System" })
                 }
                 IconButton(onClick = { showSettings = true }) {
                     Icon(Icons.Filled.Settings, contentDescription = "Settings")

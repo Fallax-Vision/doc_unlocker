@@ -7,7 +7,7 @@
 **Recover the password of a Microsoft Office or PDF document _you own_ - with a friendly GUI, smart guessing, and optional GPU acceleration.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.3-success.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.4-success.svg)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-informational.svg)](#installation)
 [![Python](https://img.shields.io/badge/python-3.10%2B-yellow.svg)](https://www.python.org/)
 

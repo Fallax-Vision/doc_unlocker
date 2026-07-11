@@ -37,3 +37,7 @@ venv/
 *.log
 .DS_Store
 Thumbs.db
+
+# Local planning and agent instructions
+/AGENTS.md
+/plans/

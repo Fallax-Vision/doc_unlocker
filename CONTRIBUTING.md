@@ -32,38 +32,35 @@ py -m pip install -r requirements.txt
 py doc_unlocker.py
 ```
 
-The whole app lives in a single file: **`doc_unlocker.py`**.
+The desktop app is in **`doc_unlocker.py`**; the native Android app is in **`android/`**.
 
 ### Project layout
 
 - `doc_unlocker.py` - the app (logic + GUI)
 - `build_exe.py` - PyInstaller build script
 - `assets/` - icon and `make_icon.py`
-- `.github/workflows/` - CI that builds and publishes the `.exe` on a version tag
+- `.github/workflows/` - CI that validates and publishes both platforms after a version bump
 
 ### Building the `.exe`
 
 ```bash
 py -m pip install --user pyinstaller
-py build_exe.py        # -> dist/DocUnlocker.exe
+py build_exe.py        # -> dist/DocUnlocker-v1.0.5.exe
 ```
 
 ## Pull request workflow
 
 1. Fork the repo and create a branch: `git checkout -b feature/my-thing`.
 2. Make your change. Keep the app a single self-contained file where practical.
-3. Run a quick smoke test: launch the app, switch themes, try a small attack.
+3. Run `python -m pytest -q`, the JVM engine regressions, Android lint and a UI smoke test.
 4. Update `CHANGELOG.md` under an *Unreleased* heading.
 5. Commit with a clear message and open a PR against `main`.
 
 ## Versioning and releases
 
-We use [Semantic Versioning](https://semver.org/). To cut a release:
-
-1. Bump `__version__` in `doc_unlocker.py` and add a `CHANGELOG.md` entry.
-2. Tag it: `git tag vX.Y.Z && git push --tags`.
-3. CI (`.github/workflows/release.yml`) builds the Windows `.exe` and attaches
-   it to the GitHub Release automatically.
+We use [Semantic Versioning](https://semver.org/). Update both platform versions and
+`CHANGELOG.md`; follow [release setup](GITHUB_SETUP.md) for testing, signing and the
+version-triggered workflow. Keep generated files, keys and user documents out of Git.
 
 ## Good first issues
 

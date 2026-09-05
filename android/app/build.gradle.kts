@@ -13,13 +13,27 @@ android {
         applicationId = "com.fallaxvision.docunlocker"
         minSdk = 26
         targetSdk = 36
-        versionCode = 10004
-        versionName = "1.0.4"
+        versionCode = 10005
+        versionName = "1.0.5"
+    }
+
+    signingConfigs {
+        create("release") {
+            val signingPath = System.getenv("DOC_UNLOCKER_KEYSTORE")
+            if (!signingPath.isNullOrBlank()) {
+                storeFile = file(signingPath)
+                storePassword = System.getenv("DOC_UNLOCKER_STORE_PASSWORD")
+                keyAlias = "docunlocker"
+                keyPassword = System.getenv("DOC_UNLOCKER_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            isDebuggable = false
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {
@@ -30,6 +44,14 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+}
+
+tasks.matching { it.name == "validateSigningRelease" }.configureEach {
+    doFirst {
+        check(!System.getenv("DOC_UNLOCKER_KEYSTORE").isNullOrBlank()) {
+            "Release signing is required. Set DOC_UNLOCKER_KEYSTORE and password environment variables."
+        }
     }
 }
 

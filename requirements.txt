@@ -1,8 +1,8 @@
 # Runtime dependencies (the app also auto-installs these on first launch)
-msoffcrypto-tool>=5.0   # Microsoft Office decryption
-olefile>=0.46           # reads the Office EncryptionInfo (also a dep of the above)
-pypdf>=4.0              # PDF detection / verification / decryption
-customtkinter>=5.2      # modern rounded UI (themes, light/dark/system)
+msoffcrypto-tool==6.0.0 # Microsoft Office decryption
+olefile==0.47           # reads the Office EncryptionInfo
+pypdf==6.12.2           # PDF detection / verification / decryption
+customtkinter==5.2.2    # modern rounded UI (themes, light/dark/system)
 
 # Optional: only needed as a fallback to unpack Hashcat's .7z on systems
 # without the built-in Windows 'tar' (libarchive) or 7-Zip. Safe to skip.

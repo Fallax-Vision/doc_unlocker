@@ -19,7 +19,7 @@ legacy and macro-enabled variants) and PDF documents.
 
 from __future__ import annotations
 
-__version__ = "1.0.4"
+__version__ = "1.0.5"
 __app_name__ = "Doc Unlocker"
 
 import io
@@ -30,6 +30,10 @@ import json
 import re
 import time
 import queue
+import hashlib
+import tempfile
+import multiprocessing
+from collections import deque
 import base64
 import shutil
 import threading
@@ -107,8 +111,9 @@ def ensure_dependencies():
         return False
 
 
-if not ensure_dependencies():
-    sys.exit(1)
+if __name__ == "__main__":
+    if not ensure_dependencies():
+        sys.exit(1)
 
 import olefile
 import msoffcrypto
@@ -279,9 +284,13 @@ def date_combos(words):
 
 
 def _read_lines(path):
+    if os.path.getsize(path) > 32 * 1024 * 1024:
+        raise ValueError("Wordlists must be 32 MiB or smaller.")
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         for line in f:
             line = line.rstrip("\r\n")
+            if len(line) > 1024:
+                raise ValueError("Wordlist entries must be 1,024 characters or shorter.")
             if line:
                 yield line
 
@@ -357,11 +366,11 @@ def load_tested(doc_path):
     tried = set()
     if os.path.isfile(path):
         try:
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    line = line.rstrip("\r\n")
-                    if line:
-                        tried.add(line)
+            for line in history_lines(path):
+                line = line.rstrip("\r\n")
+                if line:
+                    tried.add(line if re.fullmatch(r"sha256:[0-9a-f]{64}", line)
+                              else attempt_digest(line))
         except Exception:
             pass
     return tried
@@ -372,11 +381,55 @@ def append_tested(doc_path, passwords):
         return tested_path_for(doc_path)
     path = tested_path_for(doc_path)
     try:
-        with open(path, "a", encoding="utf-8") as f:
-            f.write("\n".join(passwords) + "\n")
+        previous = deque(maxlen=50000)
+        if os.path.isfile(path):
+            previous.extend(history_lines(path))
+        history = deque((line if re.fullmatch(r"sha256:[0-9a-f]{64}", line)
+                         else attempt_digest(line) for line in previous if line), maxlen=50000)
+        history.extend(attempt_digest(password) for password in passwords)
+        atomic_write(path, ("\n".join(history) + "\n").encode("utf-8"))
     except Exception:
         pass
     return path
+
+
+def attempt_digest(password):
+    return "sha256:" + hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
+def history_lines(path):
+    # Read at most 4 MiB even when migrating an old, very large resume file.
+    with open(path, "rb") as stream:
+        size = os.fstat(stream.fileno()).st_size
+        if size > 4 * 1024 * 1024:
+            stream.seek(size - 4 * 1024 * 1024)
+            stream.readline(4096)
+        data = stream.read(4 * 1024 * 1024)
+    return [line for line in data.decode("utf-8", errors="ignore").splitlines()[-50000:]
+            if 0 < len(line) <= 1024]
+
+
+def atomic_write(path, data):
+    """Replace only a complete app-owned file, with no accumulating temp copies."""
+    fd, temp = tempfile.mkstemp(prefix=".docunlocker-", dir=os.path.dirname(os.path.abspath(path)))
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+        os.replace(temp, path)
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
+
+
+MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
+
+
+def read_document(path):
+    with open(path, "rb") as stream:
+        data = stream.read(MAX_DOCUMENT_BYTES + 1)
+    if len(data) > MAX_DOCUMENT_BYTES:
+        raise ValueError("Documents must be 64 MiB or smaller.")
+    return data
 
 
 # ===========================================================================
@@ -474,10 +527,23 @@ def is_protected(file_bytes, kind):
 # --- Office ---------------------------------------------------------------
 def _office_decrypt_bytes(file_bytes, password):
     office = msoffcrypto.OfficeFile(io.BytesIO(file_bytes))
-    office.load_key(password=password)
+    validate_office_parameters(office)
+    if getattr(office, "format", None) == "ooxml":
+        office.load_key(password=password, verify_password=True)
+    else:
+        office.load_key(password=password)
     out = io.BytesIO()
     office.decrypt(out)
     return out.getvalue()
+
+
+def validate_office_parameters(office):
+    info = getattr(office, "info", {})
+    if isinstance(info, dict) and "spinValue" in info:
+        if not 0 <= info["spinValue"] <= 1000000:
+            raise ValueError("Office encryption exceeds the supported iteration limit.")
+        if info.get("keyDataBlockSize") != 16 or info.get("passwordKeyBits") not in (128, 192, 256):
+            raise ValueError("Unsupported Office encryption sizes.")
 
 
 # --- PDF ------------------------------------------------------------------
@@ -499,7 +565,7 @@ def _pdf_decrypt_to(file_bytes, password, out_path):
         raise RuntimeError("Wrong password for this PDF.")
     writer = pypdf.PdfWriter()
     writer.append(reader)
-    with open(out_path, "wb") as f:
+    with open(out_path, "xb") as f:
         writer.write(f)
 
 
@@ -522,23 +588,141 @@ def decrypt_to(file_bytes, password, out_path, kind="office"):
     data = _office_decrypt_bytes(file_bytes, password)
     if not data[:4].startswith(_OFFICE_MAGIC):
         raise RuntimeError("Decryption produced invalid output (wrong password).")
-    with open(out_path, "wb") as out:
+    with open(out_path, "xb") as out:
         out.write(data)
+
+
+def unlocked_path(doc_path):
+    folder = os.path.dirname(doc_path)
+    stem, suffix = os.path.splitext(os.path.basename(doc_path))
+    for index in range(10000):
+        extra = f" ({index})" if index else ""
+        path = os.path.join(folder, f"Unlocked_{stem}{extra}{suffix}")
+        if not os.path.lexists(path):
+            return path
+    raise ValueError("Too many unlocked copies in this folder; choose another folder.")
+
+
+class RecoveryCancelled(Exception):
+    pass
+
+
+def _password_worker(data, kind, requests, results):
+    """Isolated parser/KDF worker: the UI can terminate a stalled library call."""
+    try:
+        if kind == "office":
+            validate_office_parameters(msoffcrypto.OfficeFile(io.BytesIO(data)))
+        else:
+            _pdf_reader(data)
+        results.put(("ready", None))
+        while True:
+            password = requests.get()
+            if password is None:
+                return
+            try:
+                if kind == "office":
+                    plain = _office_decrypt_bytes(data, password)
+                    if not plain[:4].startswith(_OFFICE_MAGIC):
+                        plain = None
+                else:
+                    reader = _pdf_reader(data)
+                    plain = None
+                    if not reader.is_encrypted or int(reader.decrypt(password)) != 0:
+                        writer = pypdf.PdfWriter()
+                        writer.append(reader)
+                        output = io.BytesIO()
+                        writer.write(output)
+                        plain = output.getvalue()
+                results.put(("result", plain))
+            except Exception:
+                results.put(("result", None))
+    except Exception as exc:
+        results.put(("error", str(exc)))
+
+
+class RecoverySession:
+    def __init__(self, data, kind, stop):
+        context = multiprocessing.get_context("spawn")
+        self.requests = context.Queue(maxsize=1)
+        self.results = context.Queue(maxsize=1)
+        self.stop = stop
+        self.process = context.Process(target=_password_worker,
+                                       args=(data, kind, self.requests, self.results), daemon=True)
+
+    def __enter__(self):
+        try:
+            self.process.start()
+            self.receive()
+            return self
+        except BaseException:
+            self.close()
+            raise
+
+    def receive(self):
+        while True:
+            if self.stop.is_set():
+                raise RecoveryCancelled("Stopped")
+            try:
+                kind, value = self.results.get(timeout=0.05)
+                if kind == "error":
+                    raise ValueError(value)
+                return value
+            except queue.Empty:
+                if not self.process.is_alive():
+                    raise RuntimeError("The document worker exited unexpectedly.")
+
+    def attempt(self, password):
+        self.requests.put(password)
+        return self.receive()
+
+    def close(self):
+        if self.process.pid is not None:
+            if self.process.is_alive():
+                self.process.terminate()
+            self.process.join(timeout=2)
+        for channel in (self.requests, self.results):
+            channel.cancel_join_thread()
+            channel.close()
+
+    def __exit__(self, *_):
+        self.close()
 
 
 def write_log(folder, doc_path, password, tries, out_path):
     log_path = os.path.join(folder, "DocUnlocker_found.log")
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    line = (f"[{stamp}] file={doc_path!r} password={password!r} "
+    line = (f"[{stamp}] file={os.path.basename(doc_path)!r} "
             f"tries={tries} unlocked={out_path!r}\n")
     try:
+        # Migrate only this application's known log files; discard old secret fields.
+        for existing in (log_path, log_path + ".1", log_path + ".2"):
+            if os.path.isfile(existing):
+                with open(existing, "rb") as stream:
+                    oversized = os.path.getsize(existing) > 1024 * 1024
+                    if oversized:
+                        stream.seek(-1024 * 1024, os.SEEK_END)
+                        stream.readline()
+                    old = stream.read().decode("utf-8", errors="replace")
+                if oversized or " password=" in old:
+                    cleaned = []
+                    for record in old.splitlines():
+                        if " password=" in record:
+                            left, _, right = record.partition(" password=")
+                            marker = right.rfind(" tries=")
+                            if marker < 0:
+                                continue
+                            record = left + right[marker:]
+                        cleaned.append(record)
+                    atomic_write(existing, ("\n".join(cleaned) + "\n").encode("utf-8"))
+        if os.path.exists(log_path) and os.path.getsize(log_path) >= 1024 * 1024:
+            for index in (2, 1):
+                source = log_path if index == 1 else f"{log_path}.{index - 1}"
+                if os.path.isfile(source):
+                    os.replace(source, f"{log_path}.{index}")
         with open(log_path, "a", encoding="utf-8") as f:
             f.write(line)
     except Exception:
-        log_path = os.path.join(os.environ.get("TEMP", folder),
-                                "DocUnlocker_found.log")
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(line)
+        return "Log unavailable (unlocked copy was saved)."
     return log_path
 
 
@@ -605,17 +789,29 @@ def download_hashcat(progress_cb=None):
     if existing:
         return existing
     dest_dir = app_dir()
-    archive = os.path.join(dest_dir, f"hashcat-{HASHCAT_VERSION}.7z")
-    if not (os.path.isfile(archive) and os.path.getsize(archive) > 5_000_000):
-        def _hook(block_num, block_size, total_size):
-            if progress_cb:
-                progress_cb(block_num * block_size, total_size)
-        urllib.request.urlretrieve(HASHCAT_URL, archive, _hook)
-    extract_7z(archive, dest_dir)
-    try:
-        os.remove(archive)
-    except OSError:
-        pass
+    # A private temporary download prevents partial archives from being reused.
+    with tempfile.TemporaryDirectory(prefix=".docunlocker-download-", dir=dest_dir) as scratch:
+        archive = os.path.join(scratch, "hashcat.7z")
+        with urllib.request.urlopen(HASHCAT_URL, timeout=15) as response, open(archive, "wb") as output:
+            total = int(response.headers.get("Content-Length", 0))
+            done = 0
+            updated = 0.0
+            while True:
+                chunk = response.read(65536)
+                if not chunk:
+                    break
+                done += len(chunk)
+                if done > 64 * 1024 * 1024:
+                    raise ValueError("Hashcat download exceeds the 64 MiB limit.")
+                output.write(chunk)
+                if progress_cb and time.monotonic() - updated >= 0.1:
+                    progress_cb(done, total)
+                    updated = time.monotonic()
+            if total and done != total:
+                raise ValueError("Incomplete Hashcat download; please retry.")
+        if progress_cb:
+            progress_cb(done, total)
+        extract_7z(archive, dest_dir)
     exe = find_hashcat()
     if not exe:
         raise RuntimeError("Extracted Hashcat but could not find hashcat.exe.")
@@ -684,18 +880,21 @@ def load_settings():
     s = dict(DEFAULT_SETTINGS)
     try:
         with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
-            s.update(json.load(f))
+            values = json.load(f)
+            if isinstance(values, dict):
+                s.update({key: value for key, value in values.items()
+                          if key in s and type(value) is type(s[key])})
     except Exception:
         pass
+    if s["theme"] not in ("System", "Light", "Dark"):
+        s["theme"] = "System"
+    if s["corners"] not in ("Rounded", "Sharp"):
+        s["corners"] = "Rounded"
     return s
 
 
 def save_settings(s):
-    try:
-        with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
-            json.dump(s, f, indent=2)
-    except Exception:
-        pass
+    atomic_write(SETTINGS_PATH, json.dumps(s, indent=2).encode("utf-8"))
 
 
 # Accent colours as (light, dark) tuples for CustomTkinter.
@@ -704,7 +903,7 @@ CARD_FG = ("#ffffff", "#0b1622")
 FIELD_FG = ("#ffffff", "#08131e")
 STATUS_FG = ("#f8fafc", "#091522")
 TEXT = ("#111827", "#f8fafc")
-MUTED_TEXT = ("#9ca3af", "#a8b0bd")
+MUTED_TEXT = ("#5b6472", "#a8b0bd")
 BLUE = ("#2563eb", "#1d6eff")
 BLUE_HOVER = ("#1d4ed8", "#2f7dff")
 BLUE_SOFT = ("#eff6ff", "#122744")
@@ -747,6 +946,10 @@ class App:
         self._pump_active = False
         self._ptotal = 1
         self._round = []                 # widgets whose corner_radius can change
+        self._settings_window = None
+        self.settings_thread = None
+        self.update_thread = None
+        self._settings_dirty = False
         self.settings = load_settings()
 
         ctk.set_appearance_mode(self.settings.get("theme", "System"))
@@ -754,8 +957,8 @@ class App:
 
         root.title(f"{__app_name__} - Password Recovery  v{__version__}")
         root.configure(fg_color=APP_BG)
-        self._center(900, 560)
-        root.minsize(820, 560)
+        self._center(920, 620)
+        root.minsize(820, 580)
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         root.bind("<Control-comma>", lambda _event: self.open_settings())
         self._set_window_icon(root)
@@ -802,8 +1005,8 @@ class App:
         self.root.update_idletasks()
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        w = min(w, max(820, sw - 80))
-        h = min(h, max(540, sh - 80))
+        w = min(w, sw - 48)
+        h = min(h, sh - 80)
         x = max(0, (sw - w) // 2)
         y = max(0, (sh - h) // divisor)
         return f"{w}x{h}+{x}+{y}"
@@ -822,7 +1025,7 @@ class App:
 
     def _entry(self, parent, textvariable, placeholder=""):
         e = ctk.CTkEntry(parent, textvariable=textvariable, corner_radius=self.R,
-                         height=34, placeholder_text=placeholder, fg_color=FIELD_FG,
+                         height=36, placeholder_text=placeholder, fg_color=FIELD_FG,
                          border_width=1, border_color=GHOST_BORDER,
                          text_color=TEXT, placeholder_text_color=MUTED_TEXT,
                          font=ctk.CTkFont(family="Segoe UI", size=13))
@@ -860,7 +1063,7 @@ class App:
                      font=ctk.CTkFont(family="Segoe UI", size=12)).pack(
             side="left", pady=(6, 0))
         self.settings_btn = ctk.CTkButton(
-            header, text=f"{ICO_SETTINGS}  Settings", width=112, height=32,
+            header, text=f"{ICO_SETTINGS}  Settings", width=112, height=36,
             corner_radius=self.R, command=self.open_settings,
             fg_color="transparent", border_width=1, border_color=GHOST_BORDER,
             text_color=TEXT, hover_color=GHOST_HOVER,
@@ -868,7 +1071,7 @@ class App:
         self.settings_btn.pack(side="right")
         self._round.append(self.settings_btn)
         self.theme_btn = ctk.CTkButton(
-            header, text="Theme", width=78, height=32, corner_radius=self.R,
+            header, text="Theme", width=78, height=36, corner_radius=self.R,
             command=self.toggle_theme, fg_color="transparent", border_width=1,
             border_color=GHOST_BORDER, text_color=TEXT, hover_color=GHOST_HOVER,
             font=ctk.CTkFont(family="Segoe UI", size=12))
@@ -907,7 +1110,7 @@ class App:
         self._entry(row, self.doc_var, "Select a locked Word / Excel / "
                     "PowerPoint / PDF document...").pack(
             side="left", fill="x", expand=True)
-        b = ctk.CTkButton(row, text=f"{ICO_BROWSE}  Browse", width=104, height=34,
+        b = ctk.CTkButton(row, text=f"{ICO_BROWSE}  Browse", width=104, height=36,
                           corner_radius=self.R, command=self.pick_doc,
                           fg_color="transparent", border_width=1,
                           border_color=GHOST_BORDER, text_color=TEXT,
@@ -924,7 +1127,7 @@ class App:
         row2.pack(fill="x", **pad)
         self._entry(row2, self.wl_var, "Select wordlist file (optional)...").pack(
             side="left", fill="x", expand=True)
-        b2 = ctk.CTkButton(row2, text=f"{ICO_BROWSE}  Browse", width=104, height=34,
+        b2 = ctk.CTkButton(row2, text=f"{ICO_BROWSE}  Browse", width=104, height=36,
                            corner_radius=self.R, command=self.pick_wl,
                            fg_color="transparent", border_width=1,
                            border_color=GHOST_BORDER, text_color=TEXT,
@@ -935,11 +1138,11 @@ class App:
 
         row3 = ctk.CTkFrame(card, fg_color="transparent")
         row3.pack(fill="x", pady=(10, 12), **pad)
-        ctk.CTkLabel(row3, text="If no wordlist, try PINs up to this many digits:"
+        ctk.CTkLabel(row3, text="Maximum numeric PIN length:"
                      , text_color=TEXT,
                      font=ctk.CTkFont(family="Segoe UI", size=13)).pack(side="left")
         self.digits_menu = ctk.CTkOptionMenu(
-            row3, width=68, height=32, corner_radius=self.R, variable=self.digits_var,
+            row3, width=80, height=36, corner_radius=self.R, variable=self.digits_var,
             values=[str(i) for i in range(1, 13)], fg_color=FIELD_FG,
             button_color=BLUE, button_hover_color=BLUE_HOVER,
             text_color=TEXT, dropdown_fg_color=CARD_FG,
@@ -958,7 +1161,7 @@ class App:
             (self.dates_var, f"Word + date patterns ({DATE_YEAR_START}-{DATE_YEAR_END})"),
             (self.two_var, "Two-word combinations (large - slower)"),
         ]:
-            ctk.CTkCheckBox(card, text=text, variable=var,
+            ctk.CTkCheckBox(card, text=text, variable=var, height=30,
                             corner_radius=5, border_width=1,
                             fg_color=BLUE, hover_color=BLUE_HOVER,
                             border_color=("#b8c2d0", "#4b5563"),
@@ -980,12 +1183,13 @@ class App:
             f"{ICO_RUN}  Run Hashcat now": self.run_hashcat,
         }
         self.more_actions_menu = ctk.CTkOptionMenu(
-            title_row, width=92, height=30, corner_radius=self.R,
+            title_row, width=100, height=36, corner_radius=self.R,
             values=list(self.more_actions.keys()), command=self._run_more_action,
             fg_color=FIELD_FG, button_color=FIELD_FG,
             button_hover_color=GHOST_HOVER, text_color=TEXT,
             dropdown_fg_color=CARD_FG, dropdown_hover_color=GHOST_HOVER,
             dropdown_text_color=TEXT,
+            dropdown_font=ctk.CTkFont(family="Segoe UI", size=14),
             font=ctk.CTkFont(family="Segoe UI", size=12))
         self.more_actions_menu.set(f"{ICO_MORE}  More")
         self.more_actions_menu.pack(side="right")
@@ -1026,8 +1230,8 @@ class App:
             inner, text=f"{ICO_GPU}  GPU brute-force (all combos)", width=W, height=40,
             corner_radius=self.R, anchor="w", command=self.run_gpu_bruteforce,
             font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            fg_color=PURPLE, hover_color=PURPLE_HOVER,
-            border_width=1, border_color=PURPLE_BORDER)
+            fg_color="transparent", hover_color=GHOST_HOVER, text_color=TEXT,
+            border_width=1, border_color=GHOST_BORDER)
         self.bf_btn.pack(fill="x", pady=4)
         self._round.append(self.bf_btn)
 
@@ -1038,7 +1242,7 @@ class App:
             command()
 
     def _build_status_card(self, parent):
-        card = self._card(parent, height=128)
+        card = self._card(parent, height=155)
         card.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         card.pack_propagate(False)
         self._section_title(card, "Progress & Status").pack(
@@ -1062,10 +1266,11 @@ class App:
         row.pack_propagate(False)
         self._round.append(row)
 
-        self.status = ctk.CTkLabel(row, text="Status: Idle",
+        self.status = ctk.CTkLabel(card, text="Status: Idle",
                                    text_color=BLUE, anchor="w",
                                    font=ctk.CTkFont(family="Segoe UI", size=12))
-        self.status.pack(side="left", fill="x", expand=True, padx=(14, 10))
+        self.status.pack(fill="x", padx=16, pady=(0, 4), before=row)
+        self.status.bind("<Configure>", lambda e: self.status.configure(wraplength=max(100, e.width - 12)))
         self.tries_lbl = ctk.CTkLabel(row, text="Tries: 0",
                                       text_color=TEXT, anchor="w",
                                       font=ctk.CTkFont(family="Segoe UI", size=12))
@@ -1087,20 +1292,30 @@ class App:
 
     # ---- settings dialog ---------------------------------------------
     def open_settings(self):
+        if self._settings_window is not None and self._settings_window.winfo_exists():
+            self._settings_window.lift()
+            return
         win = ctk.CTkToplevel(self.root)
+        self._settings_window = win
         win.title("Settings")
         win.configure(fg_color=APP_BG)
         win.transient(self.root)
-        win.geometry(self._window_geometry(460, 620, divisor=2))
-        win.after(200, win.grab_set)
+        win.geometry(self._window_geometry(500, 650, divisor=2))
+        win.bind("<Escape>", lambda _event: win.destroy())
+        win.after(200, lambda: win.winfo_exists() and win.grab_set())
         win.after(260, lambda: self._set_window_icon(win))
 
         ctk.CTkLabel(win, text="Settings", text_color=TEXT,
                      font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold")).pack(
             anchor="w", padx=22, pady=(22, 8))
+        ctk.CTkButton(win, text="Done", height=38, command=win.destroy,
+                      corner_radius=self.R, fg_color=BLUE, hover_color=BLUE_HOVER).pack(
+            side="bottom", fill="x", padx=22, pady=14)
+        content = ctk.CTkScrollableFrame(win, fg_color="transparent")
+        content.pack(fill="both", expand=True)
 
         # Appearance
-        sec1 = ctk.CTkFrame(win, corner_radius=self.R, fg_color=CARD_FG,
+        sec1 = ctk.CTkFrame(content, corner_radius=self.R, fg_color=CARD_FG,
                             border_width=1, border_color=GHOST_BORDER)
         sec1.pack(fill="x", padx=22, pady=8)
         self._round.append(sec1)
@@ -1138,7 +1353,7 @@ class App:
         self._round.append(corner_seg)
 
         # Behaviour
-        sec2 = ctk.CTkFrame(win, corner_radius=self.R, fg_color=CARD_FG,
+        sec2 = ctk.CTkFrame(content, corner_radius=self.R, fg_color=CARD_FG,
                             border_width=1, border_color=GHOST_BORDER)
         sec2.pack(fill="x", padx=22, pady=8)
         self._round.append(sec2)
@@ -1154,13 +1369,14 @@ class App:
 
         # Updates + about
         update_btn = ctk.CTkButton(
-            win, text="Check for updates", height=46, corner_radius=self.R,
-            command=self._check_updates, fg_color=BLUE, hover_color=BLUE_HOVER,
+            content, text="Check for updates", height=38, corner_radius=self.R,
+            command=self._check_updates, fg_color=FIELD_FG, hover_color=GHOST_HOVER,
+            text_color=TEXT, border_width=1, border_color=GHOST_BORDER,
             font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"))
         update_btn.pack(fill="x", padx=22, pady=(8, 4))
         self._round.append(update_btn)
 
-        about = ctk.CTkFrame(win, corner_radius=self.R, fg_color=CARD_FG,
+        about = ctk.CTkFrame(content, corner_radius=self.R, fg_color=CARD_FG,
                              border_width=1, border_color=GHOST_BORDER)
         about.pack(fill="x", padx=22, pady=8)
         self._round.append(about)
@@ -1188,9 +1404,9 @@ class App:
 
         def _toggle():
             self.settings[key] = bool(var.get())
-            save_settings(self.settings)
+            self._save_settings()
 
-        sw = ctk.CTkSwitch(parent, text=text, variable=var, command=_toggle,
+        sw = ctk.CTkSwitch(parent, text=text, variable=var, command=_toggle, height=36,
                            fg_color=("#d1d5db", "#374151"), progress_color=BLUE,
                            button_color=("#ffffff", "#f8fafc"),
                            button_hover_color=("#f8fafc", "#e5e7eb"),
@@ -1201,7 +1417,7 @@ class App:
 
     def _on_theme(self, value):
         self.settings["theme"] = value
-        save_settings(self.settings)
+        self._save_settings()
         ctk.set_appearance_mode(value)
         self._refresh_theme_button()
 
@@ -1226,7 +1442,8 @@ class App:
 
     def _on_corners(self, value):
         self.settings["corners"] = value
-        save_settings(self.settings)
+        self._save_settings()
+        self._round = [widget for widget in self._round if widget.winfo_exists()]
         self.R = 14 if value == "Rounded" else 0
         for w in self._round:
             try:
@@ -1240,6 +1457,9 @@ class App:
             pass
 
     def _check_updates(self):
+        if self.update_thread is not None and self.update_thread.is_alive():
+            return
+        self._set_status("Checking for updates...")
         def work():
             try:
                 req = urllib.request.Request(
@@ -1250,7 +1470,7 @@ class App:
                 latest = (data.get("tag_name") or "").lstrip("v")
                 if not latest:
                     msg = "No published releases were found yet."
-                elif latest != __version__:
+                elif tuple(int(n) for n in latest.split(".")) > tuple(int(n) for n in __version__.split(".")):
                     msg = (f"A newer version is available: v{latest}\n"
                            f"You have v{__version__}.\n\n"
                            "Download it from the GitHub Releases page.")
@@ -1258,9 +1478,28 @@ class App:
                     msg = f"You're up to date (v{__version__})."
             except Exception as exc:
                 msg = f"Update check failed:\n{exc}"
-            self.root.after(0, lambda: messagebox.showinfo("Check for updates", msg))
+            self.q.put(("update_result", msg))
 
-        threading.Thread(target=work, daemon=True).start()
+        self.update_thread = threading.Thread(target=work, daemon=True)
+        self.update_thread.start()
+        self.ensure_pump()
+
+    def _save_settings(self):
+        self._settings_dirty = True
+        self.ensure_pump()
+
+    def _flush_settings(self):
+        if not self._settings_dirty or (self.settings_thread and self.settings_thread.is_alive()):
+            return
+        self._settings_dirty = False
+        snapshot = dict(self.settings)
+        def work():
+            try:
+                save_settings(snapshot)
+            except Exception as exc:
+                self.q.put(("settings_error", str(exc)))
+        self.settings_thread = threading.Thread(target=work, daemon=True)
+        self.settings_thread.start()
 
     # ---- notifications / close ---------------------------------------
     def _notify(self):
@@ -1289,7 +1528,14 @@ class App:
                 self.hc_proc.terminate()
             except Exception:
                 pass
-        self.root.destroy()
+        self._flush_settings()
+        def close_when_saved():
+            self._flush_settings()
+            if self.settings_thread and self.settings_thread.is_alive():
+                self.root.after(50, close_when_saved)
+            else:
+                self.root.destroy()
+        close_when_saved()
 
     # ---- file pickers -------------------------------------------------
     def pick_doc(self):
@@ -1316,6 +1562,8 @@ class App:
 
     # ---- CPU dictionary attack ---------------------------------------
     def start(self):
+        if self._jobs_alive():
+            return
         doc = self.doc_var.get().strip().strip('"')
         if not doc or not os.path.isfile(doc):
             messagebox.showerror("Error", "Please choose a valid document path.")
@@ -1324,20 +1572,41 @@ class App:
         if wl and not os.path.isfile(wl):
             messagebox.showerror("Error", "The wordlist path is not a valid file.")
             return
-        # Pre-check: supported + actually encrypted. proceed=False -> cancel;
-        # forced=True -> user chose Continue on an unsupported/unencrypted file.
-        proceed, forced = self._precheck_document(doc)
-        if not proceed:
+        options = (doc, wl or None, int(self.digits_var.get()), self.mut_var.get(),
+                   self.two_var.get(), self.dates_var.get())
+        self._set_busy()
+        self.stop_flag.clear()
+        self._set_status("Checking document...")
+        def work():
+            try:
+                data = read_document(doc)
+                protected = is_protected(data, detect_kind(doc))
+                hc = find_hashcat()
+                self.q.put(("precheck", options, protected, hc))
+            except Exception as exc:
+                self.q.put(("error", str(exc)))
+        self.worker = threading.Thread(target=work, daemon=True)
+        self.worker.start()
+        self.ensure_pump()
+
+    def _start_checked(self, options, protected, hc):
+        doc, wl, digits, mutations, two, dates = options
+        if self.stop_flag.is_set():
+            self.finish()
+            self._set_status("Stopped.")
+            return
+        unsupported = os.path.splitext(doc)[1].lower() not in SUPPORTED_EXTS
+        forced = unsupported or not protected
+        if forced and not self._confirm_unencrypted(detect_kind(doc), unsupported):
+            self.finish()
             self._set_status("Cancelled.")
             return
-        hc = find_hashcat()
         if not forced and hc and detect_kind(doc) != "pdf":
             self._begin_gpu_run()
             self._set_status("GPU available. Starting Hashcat...")
             self.hc_run_thread = threading.Thread(
                 target=self._run_hashcat_worker,
-                args=(doc, wl or None, self.mut_var.get(), self.two_var.get(),
-                      self.dates_var.get(), hc), daemon=True)
+                args=(doc, wl, mutations, two, dates, hc), daemon=True)
             self.hc_run_thread.start()
             self.ensure_pump()
             return
@@ -1351,27 +1620,9 @@ class App:
         self.eta_lbl.configure(text="Est. time left: -")
         self.worker = threading.Thread(
             target=self.run_crack,
-            args=(doc, wl or None, int(self.digits_var.get()), self.mut_var.get(),
-                  self.two_var.get(), self.dates_var.get(), forced), daemon=True)
+            args=(doc, wl, digits, mutations, two, dates, forced), daemon=True)
         self.worker.start()
         self.ensure_pump()
-
-    def _precheck_document(self, doc):
-        """Returns (proceed, forced). Warns (with Cancel/Continue) if the file
-        is an unsupported type or doesn't appear encrypted."""
-        ext = os.path.splitext(doc)[1].lower()
-        kind = detect_kind(doc)
-        if ext not in SUPPORTED_EXTS:
-            return (self._confirm_unencrypted(kind, unsupported=True), True)
-        try:
-            with open(doc, "rb") as f:
-                head = f.read()
-        except Exception as exc:
-            messagebox.showerror("Error", str(exc))
-            return (False, False)
-        if is_protected(head, kind):
-            return (True, False)
-        return (self._confirm_unencrypted(kind, unsupported=False), True)
 
     def _confirm_unencrypted(self, kind, unsupported=False):
         """Modal warning with 'OK, Cancel' and 'Continue'. Returns True to go on."""
@@ -1392,8 +1643,9 @@ class App:
         win = ctk.CTkToplevel(self.root)
         win.title("Heads up")
         win.transient(self.root)
-        win.geometry("470x250")
-        win.after(150, win.grab_set)
+        win.configure(fg_color=APP_BG)
+        win.geometry(self._window_geometry(480, 290, divisor=2))
+        win.after(150, lambda: win.winfo_exists() and win.grab_set())
         result = {"v": False}
         ctk.CTkLabel(win, text=msg, wraplength=430, justify="left").pack(
             padx=20, pady=(22, 16), anchor="w")
@@ -1408,12 +1660,13 @@ class App:
             result["v"] = True
             win.destroy()
 
-        ctk.CTkButton(row, text="Cancel", command=cancel, width=150).pack(
+        ctk.CTkButton(row, text="Cancel", command=cancel, width=150, height=38).pack(
             side="left", padx=8)
-        ctk.CTkButton(row, text="Continue", command=cont, width=150,
+        ctk.CTkButton(row, text="Continue", command=cont, width=150, height=38,
                       fg_color="#b45309", hover_color="#92400e").pack(
             side="left", padx=8)
         win.protocol("WM_DELETE_WINDOW", cancel)
+        win.bind("<Escape>", lambda _event: cancel())
         self.root.wait_window(win)
         return result["v"]
 
@@ -1428,9 +1681,11 @@ class App:
 
     def run_crack(self, doc_path, wordlist, digit_len, use_mutations,
                   use_twoword, use_dates, force=False):
+        session = None
+        tries = 0
+        new_tested = deque(maxlen=50000)
         try:
-            with open(doc_path, "rb") as f:
-                file_bytes = f.read()
+            file_bytes = read_document(doc_path)
             doc_kind = detect_kind(doc_path)
             if not force and not is_protected(file_bytes, doc_kind):
                 self.q.put(("error", "This file is not password-protected."))
@@ -1439,13 +1694,19 @@ class App:
                 wordlist, digit_len, use_mutations, use_twoword, use_dates)
             self.q.put(("total", total))
             already = load_tested(doc_path)
-            seen, new_tested = set(), []
+            seen, new_tested = set(), deque(maxlen=50000)
             tries = skipped = 0
             found = None
             stopped = False
-            if doc_kind == "pdf" and test_password(file_bytes, "", doc_kind):
-                found = ""
+            session = RecoverySession(file_bytes, doc_kind, self.stop_flag)
+            session.__enter__()
+            plain = None
+            if doc_kind == "pdf":
+                plain = session.attempt("")
+                if plain is not None:
+                    found = ""
             start_t = time.time()
+            last_update = start_t
             for pw in candidates:
                 if found is not None:
                     break
@@ -1454,18 +1715,25 @@ class App:
                     break
                 if pw in seen:
                     continue
+                if len(seen) >= 50000:
+                    seen.clear()
                 seen.add(pw)
-                if pw in already:
+                if attempt_digest(pw) in already:
                     skipped += 1
                     continue
                 tries += 1
-                if tries % 250 == 0 or tries == 1:
+                if tries == 1 or time.time() - last_update >= 0.2:
+                    last_update = time.time()
                     elapsed = time.time() - start_t
                     rate = tries / elapsed if elapsed > 0 else 0.0
                     remaining = max(0, total - tries - skipped)
                     eta = remaining / rate if rate > 0 else None
                     self.q.put(("progress", tries, pw, skipped, rate, eta, total))
-                if test_password(file_bytes, pw, doc_kind):
+                plain = session.attempt(pw)
+                if plain is not None:
+                    if self.stop_flag.is_set():
+                        stopped = True
+                        break
                     found = pw
                     break
                 new_tested.append(pw)
@@ -1475,12 +1743,19 @@ class App:
                 self.q.put((msg_kind, tries, len(new_tested), tested_file))
                 return
             folder = os.path.dirname(doc_path)
-            out_path = os.path.join(folder, "Unlocked_" + os.path.basename(doc_path))
-            decrypt_to(file_bytes, found, out_path, doc_kind)
+            out_path = unlocked_path(doc_path)
+            with open(out_path, "xb") as output:
+                output.write(plain)
             log_path = write_log(folder, doc_path, found, tries, out_path)
             self.q.put(("found", tries, found, out_path, log_path))
+        except RecoveryCancelled:
+            tested_file = append_tested(doc_path, new_tested)
+            self.q.put(("stopped", tries, len(new_tested), tested_file))
         except Exception as exc:
             self.q.put(("error", str(exc)))
+        finally:
+            if session is not None:
+                session.close()
 
     # ---- GPU export ---------------------------------------------------
     def _build_gpu_files(self, doc_path, wordlist, mut, two, dates):
@@ -1493,9 +1768,15 @@ class App:
         count = 0
         with open(wl_path, "w", encoding="utf-8") as f:
             for pw in candidates:
-                if pw in seen or pw in already:
+                if self.stop_flag.is_set():
+                    raise RuntimeError("Export stopped.")
+                if pw in seen or attempt_digest(pw) in already:
                     continue
+                if len(seen) >= 50000:
+                    seen.clear()
                 seen.add(pw)
+                if f.tell() + len(pw.encode("utf-8")) + 2 > 32 * 1024 * 1024:
+                    raise ValueError("GPU wordlist exceeds the 32 MiB limit; use a smaller wordlist.")
                 f.write(pw + "\n")
                 count += 1
         hash_note = ""
@@ -1530,6 +1811,8 @@ class App:
         return None
 
     def export_gpu(self):
+        if self._jobs_alive():
+            return
         doc = self.doc_var.get().strip().strip('"')
         if not doc or not os.path.isfile(doc):
             messagebox.showerror("Error", "Please choose a valid document path.")
@@ -1537,7 +1820,8 @@ class App:
         if self._gpu_office_only(doc):
             return
         wl = self.wl_var.get().strip().strip('"')
-        self.gpu_btn.configure(state="disabled")
+        self.stop_flag.clear()
+        self._set_busy()
         self._set_status("Building GPU package...")
         self.gpu_thread = threading.Thread(
             target=self._export_gpu_worker,
@@ -1554,17 +1838,20 @@ class App:
                 doc_path, wordlist, mut, two, dates)
             hc = find_hashcat() or "hashcat"
             hash_ref = hash_path or os.path.join(folder, base + ".hash")
+            # Percent expansion is active even inside quoted cmd.exe arguments.
+            hc, hash_ref, wl_ref = (value.replace("%", "%%") for value in (hc, hash_ref, wl_path))
             bat_path = os.path.join(folder, "run_hashcat.bat")
             with open(bat_path, "w", encoding="utf-8") as f:
                 f.write(
-                    "@echo off\r\n"
+                    "@echo off\r\nsetlocal DisableDelayedExpansion\r\n"
                     "REM Auto-generated by Doc Unlocker - GPU crack (-m 9600)\r\n\r\n"
                     'echo === Dictionary attack ===\r\n'
-                    f'"{hc}" -m 9600 -a 0 "{hash_ref}" "{wl_path}" -O -w 3\r\n\r\n'
+                    f'"{hc}" -m 9600 -a 0 "{hash_ref}" "{wl_ref}" -O -w 3 '
+                    '--potfile-disable --restore-disable --logfile-disable\r\n\r\n'
                     "REM === Optional brute-force of 6-digit PINs ===\r\n"
-                    f'REM "{hc}" -m 9600 -a 3 "{hash_ref}" ?d?d?d?d?d?d -O -w 3\r\n\r\n'
-                    'echo === Show cracked password ===\r\n'
-                    f'"{hc}" -m 9600 "{hash_ref}" --show\r\n'
+                    f'REM "{hc}" -m 9600 -a 3 "{hash_ref}" ?d?d?d?d?d?d -O -w 3 '
+                    '--potfile-disable --restore-disable --logfile-disable\r\n\r\n'
+                    'echo Results are shown above; passwords are not saved.\r\n'
                     "pause\r\n")
             self.q.put(("gpu_done", count, wl_path, hash_path, bat_path,
                         hc if hc != "hashcat" else None, hash_note))
@@ -1573,6 +1860,8 @@ class App:
 
     # ---- download Hashcat --------------------------------------------
     def get_hashcat(self):
+        if self._jobs_alive():
+            return
         if find_hashcat():
             messagebox.showinfo("Hashcat", f"Hashcat is already available:\n{find_hashcat()}")
             return
@@ -1581,8 +1870,8 @@ class App:
                 f"Hashcat {HASHCAT_VERSION} (the GPU cracker) is not installed.\n\n"
                 "Download it now (~20 MB) and unpack it next to this tool?"):
             return
-        self.gpu_btn.configure(state="disabled")
-        self.more_actions_menu.configure(state="disabled")
+        self.stop_flag.clear()
+        self._set_busy()
         self._set_status("Downloading Hashcat...")
         self.hc_thread = threading.Thread(target=self._get_hashcat_worker, daemon=True)
         self.hc_thread.start()
@@ -1590,20 +1879,28 @@ class App:
 
     def _get_hashcat_worker(self):
         try:
-            exe = download_hashcat(
-                progress_cb=lambda d, t: t > 0 and self.q.put(("hc_progress", d, t)))
+            def progress(done, total):
+                if self.stop_flag.is_set():
+                    raise RecoveryCancelled("Download stopped.")
+                if total > 0:
+                    self.q.put(("hc_progress", done, total))
+            exe = download_hashcat(progress_cb=progress)
             self.q.put(("hc_done", exe))
         except Exception as exc:
             self.q.put(("hc_error", str(exc)))
 
     # ---- test GPU -----------------------------------------------------
     def test_gpu(self):
+        if self._jobs_alive():
+            return
         hc = find_hashcat()
         if not hc:
             messagebox.showwarning("Hashcat needed",
                                    "Click 'Get Hashcat' first, then 'Test GPU'.")
             return
         self._set_status("Querying GPU devices...")
+        self._set_busy()
+        self.stop_flag.clear()
         self.hc_run_thread = threading.Thread(target=self._test_gpu_worker,
                                               args=(hc,), daemon=True)
         self.hc_run_thread.start()
@@ -1611,10 +1908,21 @@ class App:
 
     def _test_gpu_worker(self, hc):
         try:
-            r = subprocess.run([hc, "-I"], cwd=os.path.dirname(hc) or None,
-                               stdin=subprocess.DEVNULL, capture_output=True,
-                               text=True, creationflags=_no_window(), timeout=120)
-            out = (r.stdout or "") + (r.stderr or "")
+            proc = subprocess.Popen([hc, "-I"], cwd=os.path.dirname(hc) or None,
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, text=True, creationflags=_no_window())
+            self.hc_proc = proc
+            deadline = time.monotonic() + 120
+            while True:
+                if self.stop_flag.is_set() or time.monotonic() > deadline:
+                    proc.kill()
+                    proc.communicate()
+                    raise RuntimeError("GPU test stopped or timed out.")
+                try:
+                    out, _ = proc.communicate(timeout=0.1)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
             low = out.lower()
             if "nvidia" in low or "rtx" in low or "geforce" in low:
                 verdict = "GPU DETECTED. You're ready to crack."
@@ -1628,9 +1936,13 @@ class App:
             self.q.put(("gpu_test_error", "hashcat -I timed out."))
         except Exception as exc:
             self.q.put(("gpu_test_error", str(exc)))
+        finally:
+            self.hc_proc = None
 
     # ---- run Hashcat (dictionary) ------------------------------------
     def run_hashcat(self):
+        if self._jobs_alive():
+            return
         doc = self.doc_var.get().strip().strip('"')
         if not doc or not os.path.isfile(doc):
             messagebox.showerror("Error", "Please choose a valid document path.")
@@ -1673,6 +1985,8 @@ class App:
     ]
 
     def run_gpu_bruteforce(self):
+        if self._jobs_alive():
+            return
         doc = self.doc_var.get().strip().strip('"')
         if not doc or not os.path.isfile(doc):
             messagebox.showerror("Error", "Please choose a valid document path.")
@@ -1736,6 +2050,9 @@ class App:
             self.q.put(("hcrun_status", "Hashcat: " + value))
 
     def _execute_hashcat(self, hc, hash_path, doc_path, attack_args, count):
+        if self.stop_flag.is_set():
+            self.q.put(("hcrun_stopped",))
+            return
         folder = os.path.dirname(doc_path)
         base = os.path.basename(doc_path)
         with open(hash_path, encoding="utf-8") as f:
@@ -1748,7 +2065,8 @@ class App:
             except OSError:
                 pass
         hc_dir = os.path.dirname(hc) or None
-        cmd = [hc, "-m", "9600", "-O", "-w", "3", "--potfile-path", pot,
+        cmd = [hc, "-m", "9600", "-O", "-w", "3", "--potfile-disable",
+               "--restore-disable", "--logfile-disable",
                "--outfile-format", "2", "--outfile", cracked,
                "--status", "--status-timer", "10"] + attack_args
         self.q.put(("hcrun_status", "Launching Hashcat on the GPU..."))
@@ -1776,19 +2094,28 @@ class App:
             self.q.put(("hcrun_error",
                         "Hashcat could not load the hash.\n\n" + "\n".join(tail[-8:])))
             return
-        pwd = read_cracked_password(hash_str, cracked, pot)
+        try:
+            pwd = read_cracked_password(hash_str, cracked, pot)
+        finally:
+            for path in (cracked, pot):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
         if not pwd:
             self.q.put(("hcrun_stopped",) if self.stop_flag.is_set()
                        else ("hcrun_nofound", count))
             return
-        with open(doc_path, "rb") as f:
-            file_bytes = f.read()
-        if not test_password(file_bytes, pwd):
+        file_bytes = read_document(doc_path)
+        with RecoverySession(file_bytes, detect_kind(doc_path), self.stop_flag) as session:
+            plain = session.attempt(pwd)
+        if plain is None:
             self.q.put(("hcrun_error",
                         f"Hashcat reported {pwd!r}, but it did not open the file."))
             return
-        out_path = os.path.join(folder, "Unlocked_" + base)
-        decrypt_to(file_bytes, pwd, out_path, detect_kind(doc_path))
+        out_path = unlocked_path(doc_path)
+        with open(out_path, "xb") as output:
+            output.write(plain)
         log_path = write_log(folder, doc_path, pwd, count, out_path)
         self.q.put(("hcrun_found", pwd, out_path, log_path))
 
@@ -1798,7 +2125,8 @@ class App:
         win.configure(fg_color=APP_BG)
         win.transient(self.root)
         win.geometry(self._window_geometry(460, 470, divisor=2))
-        win.after(200, win.grab_set)
+        win.bind("<Escape>", lambda _event: win.destroy())
+        win.after(200, lambda: win.winfo_exists() and win.grab_set())
 
         card = ctk.CTkFrame(win, corner_radius=self.R, fg_color=CARD_FG,
                             border_width=1, border_color=GHOST_BORDER)
@@ -1876,53 +2204,97 @@ class App:
         return result["val"]
 
     # ---- unlock with a known password --------------------------------
+    def _ask_password(self):
+        win = ctk.CTkToplevel(self.root)
+        win.title("Unlock with known password")
+        win.configure(fg_color=APP_BG)
+        win.transient(self.root)
+        win.geometry(self._window_geometry(460, 230, divisor=2))
+        win.resizable(False, False)
+        result = {"password": None}
+        ctk.CTkLabel(win, text="Unlock with known password", text_color=TEXT,
+                     font=ctk.CTkFont(size=18, weight="bold")).pack(anchor="w", padx=22, pady=(20, 8))
+        ctk.CTkLabel(win, text="Enter the document password. The original file is preserved.",
+                     text_color=MUTED_TEXT, wraplength=410, justify="left").pack(anchor="w", padx=22)
+        entry = ctk.CTkEntry(win, show="*", height=38, corner_radius=self.R,
+                             fg_color=FIELD_FG, border_color=GHOST_BORDER, text_color=TEXT)
+        entry.pack(fill="x", padx=22, pady=12)
+        def accept():
+            result["password"] = entry.get()
+            win.destroy()
+        row = ctk.CTkFrame(win, fg_color="transparent")
+        row.pack(fill="x", padx=22, pady=(0, 16))
+        ctk.CTkButton(row, text="Unlock", height=38, corner_radius=self.R,
+                      fg_color=BLUE, hover_color=BLUE_HOVER, command=accept).pack(side="right")
+        ctk.CTkButton(row, text="Cancel", height=38, corner_radius=self.R,
+                      fg_color="transparent", border_width=1, border_color=GHOST_BORDER,
+                      text_color=TEXT, hover_color=GHOST_HOVER, command=win.destroy).pack(side="right", padx=(0, 10))
+        win.bind("<Return>", lambda _event: accept())
+        win.bind("<Escape>", lambda _event: win.destroy())
+        def focus():
+            if win.winfo_exists():
+                win.grab_set()
+                entry.focus_set()
+        win.after(150, focus)
+        self.root.wait_window(win)
+        return result["password"]
+
     def unlock_known(self):
+        if self._jobs_alive():
+            return
         doc = self.doc_var.get().strip().strip('"')
         if not doc or not os.path.isfile(doc):
             messagebox.showerror("Error", "Please choose a valid document path.")
             return
-        pw = simpledialog.askstring("Unlock with known password",
-                                    "Enter the password:", parent=self.root)
-        if not pw:
+        pw = self._ask_password()
+        if pw is None:
             return
+        self._set_busy()
+        self.stop_flag.clear()
+        self._set_status("Unlocking document...")
+        self.worker = threading.Thread(target=self._unlock_known_worker, args=(doc, pw), daemon=True)
+        self.worker.start()
+        self.ensure_pump()
+
+    def _unlock_known_worker(self, doc, pw):
         try:
-            with open(doc, "rb") as f:
-                file_bytes = f.read()
+            file_bytes = read_document(doc)
             kind = detect_kind(doc)
-            if not test_password(file_bytes, pw, kind):
-                messagebox.showerror("Wrong password", "That password did not work.")
+            with RecoverySession(file_bytes, kind, self.stop_flag) as session:
+                plain = session.attempt(pw)
+            if plain is None:
+                self.q.put(("error", "That password did not work."))
+                return
+            if self.stop_flag.is_set():
+                self.q.put(("error", "Unlock stopped."))
                 return
             folder = os.path.dirname(doc)
-            out_path = os.path.join(folder, "Unlocked_" + os.path.basename(doc))
-            decrypt_to(file_bytes, pw, out_path, kind)
+            out_path = unlocked_path(doc)
+            with open(out_path, "xb") as output:
+                output.write(plain)
             log_path = write_log(folder, doc, pw, 0, out_path)
-            messagebox.showinfo("Unlocked",
-                                f"Password accepted.\n\nSaved to:\n{out_path}\n\n"
-                                f"Logged to:\n{log_path}")
-            self._set_status(f"Unlocked with: {pw}")
+            self.q.put(("found", 1, pw, out_path, log_path))
+        except RecoveryCancelled:
+            self.q.put(("error", "Unlock stopped."))
         except Exception as exc:
-            messagebox.showerror("Error", str(exc))
+            self.q.put(("error", str(exc)))
 
     # ---- run-state helpers -------------------------------------------
     def _begin_gpu_run(self):
         self.stop_flag.clear()
-        self.start_btn.configure(state="disabled")
-        for b in (self.gpu_btn, self.bf_btn):
-            b.configure(state="disabled")
-        self.more_actions_menu.configure(state="disabled")
-        self.stop_btn.configure(state="normal")
+        self._set_busy()
         self._set_status("Preparing GPU run...")
 
     def finish(self):
-        self.start_btn.configure(state="normal")
-        self.stop_btn.configure(state="disabled")
+        self._set_busy(False)
+
+    def _set_busy(self, busy=True):
+        for widget in (self.start_btn, self.unlock_btn, self.gpu_btn, self.bf_btn, self.more_actions_menu):
+            widget.configure(state="disabled" if busy else "normal")
+        self.stop_btn.configure(state="normal" if busy else "disabled")
 
     def _finish_hc(self):
-        self.start_btn.configure(state="normal")
-        for b in (self.gpu_btn, self.bf_btn):
-            b.configure(state="normal")
-        self.more_actions_menu.configure(state="normal")
-        self.stop_btn.configure(state="disabled")
+        self.finish()
 
     def _jobs_alive(self):
         return any(t is not None and t.is_alive() for t in
@@ -1951,11 +2323,20 @@ class App:
 
     # ---- UI pump (main thread) ---------------------------------------
     def pump(self):
+        self._flush_settings()
         try:
-            while True:
+            for _ in range(100):
                 msg = self.q.get_nowait()
                 kind = msg[0]
-                if kind == "total":
+                if kind == "precheck":
+                    self._start_checked(*msg[1:])
+                elif kind == "update_result":
+                    if not self._jobs_alive():
+                        self._set_status("Update check complete.")
+                    messagebox.showinfo("Check for updates", msg[1])
+                elif kind == "settings_error":
+                    messagebox.showerror("Settings not saved", msg[1])
+                elif kind == "total":
                     self._ptotal = max(1, msg[1])
                     self._set_progress_fraction(0)
                     self._set_status(f"Trying up to {msg[1]:,} passwords...")
@@ -1971,7 +2352,7 @@ class App:
                     self._set_progress_fraction(1.0)
                     self.tries_lbl.configure(text=f"Tries: {tries:,}")
                     self.finish()
-                    self._set_status(f"Done. Password: {pw}")
+                    self._set_status("Unlocked copy saved.")
                     self._notify()
                     messagebox.showinfo("Password found!",
                                         f"Success!\n\nTries: {tries:,}\n"
@@ -2061,7 +2442,7 @@ class App:
                 elif kind == "hcrun_found":
                     _, pw, out_path, log_path = msg
                     self._finish_hc()
-                    self._set_status(f"GPU crack done. Password: {pw}")
+                    self._set_status("GPU recovery complete. Unlocked copy saved.")
                     self._notify()
                     messagebox.showinfo("Password found (GPU)!",
                                         f"Hashcat cracked it!\n\nPassword: {pw}\n\n"
@@ -2089,7 +2470,8 @@ class App:
                     break
         except queue.Empty:
             pass
-        if self._jobs_alive() or not self.q.empty():
+        background = any(t and t.is_alive() for t in (self.update_thread, self.settings_thread))
+        if self._jobs_alive() or background or self._settings_dirty or not self.q.empty():
             self.root.after(100, self.pump)
         else:
             self._pump_active = False
@@ -2119,4 +2501,5 @@ def main():
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     main()

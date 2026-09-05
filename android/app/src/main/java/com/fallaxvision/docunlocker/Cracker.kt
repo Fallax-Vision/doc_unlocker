@@ -54,9 +54,8 @@ object Cracker {
             for (form in forms) for (s in SUFFIXES) yield(form + s)
         }
         for (d in 1..maxDigits) {
-            val start = Math.pow(10.0, (d - 1).toDouble()).toLong().coerceAtLeast(if (d == 1) 0 else 1)
             val end = Math.pow(10.0, d.toDouble()).toLong()
-            var i = if (d == 1) 0L else start
+            var i = 0L
             while (i < end) {
                 yield(i.toString().padStart(d, '0'))
                 i++

@@ -4,6 +4,29 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.5] - 2026-09-05
+
+### Changed
+
+- Larger, aligned controls, clearer primary actions, readable light-theme text,
+  scrollable desktop settings and full-row Android settings targets.
+- Document import, validation, known-password recovery, output saving and settings
+  persistence run asynchronously. Desktop recovery uses a cancellable worker process;
+  Android parses once per run and checks cancellation during key derivation.
+- Recovery history is limited to 50,000 hashed attempts per document; operational
+  logs omit passwords and rotate at 1 MiB with two old logs. Existing history/logs
+  migrate when used. Generated build files and release binaries have bounded retention.
+
+### Fixed
+
+- Reject oversized imports, cyclic/out-of-range OLE sectors and unsafe crypto metadata.
+- Preserve existing unlocked copies; handle import and save failures without leaving
+  the interface busy. Android numeric recovery now includes leading-zero PINs.
+- Clear transient GPU password output and disable persistent Hashcat pot/log/restore files.
+- Publish a signed, non-debuggable Android release only after both builds and checks pass.
+  Releases now include SHA-256 checksums. Older debug-signed Android installations may
+  need to be uninstalled before installing this release; preserve downloaded documents first.
+
 ## [1.0.4] - 2026-07-11
 
 ### Changed

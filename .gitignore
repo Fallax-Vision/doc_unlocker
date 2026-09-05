@@ -35,6 +35,12 @@ venv/
 .vscode/
 .idea/
 *.log
+*.log.[12]
+*.bak
+*.backup
+*.apk
+*.aab
+.pytest_cache/
 .DS_Store
 Thumbs.db
 

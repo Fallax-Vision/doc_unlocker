@@ -6,7 +6,7 @@ Usage:
     py -m pip install --user pyinstaller
     py build_exe.py
 
-Result:  dist/DocUnlocker-v1.0.2.exe   (git-ignored; ship as a Release asset)
+Result:  dist/DocUnlocker-vX.Y.Z.exe   (git-ignored; ship as a Release asset)
 
 Size: the build excludes large libraries that aren't used and enables UPX
 compression when a `upx` executable is available (on PATH, or in tools/upx/).

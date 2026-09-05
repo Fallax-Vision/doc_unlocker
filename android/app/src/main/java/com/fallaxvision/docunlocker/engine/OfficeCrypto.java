@@ -6,6 +6,8 @@ import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.function.BooleanSupplier;
+import java.util.concurrent.CancellationException;
 
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
@@ -85,8 +87,25 @@ public final class OfficeCrypto {
      * plaintext) means the password was wrong. Throws only on malformed input.
      */
     public static Result decrypt(byte[] fileBytes, String password) throws Exception {
-        Cfbf cfbf = new Cfbf(fileBytes);
+        return prepare(fileBytes).decrypt(password, () -> false);
+    }
+
+    public static Prepared prepare(byte[] fileBytes) throws Exception {
+        return new Prepared(fileBytes);
+    }
+
+    /** Parse the immutable container once per recovery run, before guessing. */
+    public static final class Prepared {
+        private final Cfbf cfbf;
+        private final int spin, keyBytes;
+        private final byte[] pSalt, encVerInput, encVerValue, encKeyValue, kdSalt;
+
+        private Prepared(byte[] fileBytes) throws Exception {
+        cfbf = new Cfbf(fileBytes);
         byte[] info = cfbf.read("EncryptionInfo");
+        if (info.length < 8 || info.length > 65536 || info[0] != 4 || info[1] != 0
+                || info[2] != 4 || info[3] != 0)
+            throw new IllegalArgumentException("Only Office agile encryption is supported.");
         // 8-byte version header, then UTF-8 XML.
         String xml = new String(info, 8, info.length - 8, StandardCharsets.UTF_8);
 
@@ -96,49 +115,76 @@ public final class OfficeCrypto {
             throw new IllegalStateException("Not agile-encrypted (no keyData/encryptedKey).");
         }
 
-        int spin = Integer.parseInt(attr(encKey, "spinCount"));
+        spin = Integer.parseInt(attr(encKey, "spinCount"));
         int keyBits = Integer.parseInt(attr(encKey, "keyBits"));
         int hashSize = Integer.parseInt(attr(encKey, "hashSize"));
         int blockSize = Integer.parseInt(attr(encKey, "blockSize"));
-        byte[] pSalt = b64(attr(encKey, "saltValue"));
-        byte[] encVerInput = b64(attr(encKey, "encryptedVerifierHashInput"));
-        byte[] encVerValue = b64(attr(encKey, "encryptedVerifierHashValue"));
-        byte[] encKeyValue = b64(attr(encKey, "encryptedKeyValue"));
-        int keyBytes = keyBits / 8;
+        if (spin < 0 || spin > 1000000 || keyBits != 256 || hashSize != 64 || blockSize != 16)
+            throw new IllegalArgumentException("Unsupported or excessive encryption parameters.");
+        for (String metadata : new String[]{keyData, encKey}) {
+            if (!"AES".equals(attr(metadata, "cipherAlgorithm"))
+                    || !"ChainingModeCBC".equals(attr(metadata, "cipherChaining"))
+                    || !"SHA512".equals(attr(metadata, "hashAlgorithm"))
+                    || !"256".equals(attr(metadata, "keyBits"))
+                    || !"64".equals(attr(metadata, "hashSize"))
+                    || !"16".equals(attr(metadata, "blockSize")))
+                throw new IllegalArgumentException("Only AES-256 / SHA-512 Office files are supported.");
+        }
+        pSalt = b64(attr(encKey, "saltValue"));
+        encVerInput = b64(attr(encKey, "encryptedVerifierHashInput"));
+        encVerValue = b64(attr(encKey, "encryptedVerifierHashValue"));
+        encKeyValue = b64(attr(encKey, "encryptedKeyValue"));
+        kdSalt = b64(attr(keyData, "saltValue"));
+        if (pSalt.length != 16 || kdSalt.length != 16 || encVerInput.length != 16
+                || encVerValue.length != 64 || encKeyValue.length != 32)
+            throw new IllegalArgumentException("Invalid encryption field lengths.");
+        keyBytes = keyBits / 8;
+        }
+
+        public Result decrypt(String password, BooleanSupplier cancelled) throws Exception {
+        if (password.length() > 1024) throw new IllegalArgumentException("Password is too long.");
+        if (cancelled.getAsBoolean()) throw new CancellationException("Stopped");
 
         // Password hash: H0 = SHA512(salt + UTF16LE(pw)); iterate spinCount.
         byte[] h = sha512(pSalt, password.getBytes(StandardCharsets.UTF_16LE));
-        for (int i = 0; i < spin; i++) h = sha512(le32(i), h);
+        MessageDigest digest = MessageDigest.getInstance("SHA-512");
+        for (int i = 0; i < spin; i++) {
+            if ((i & 1023) == 0 && (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()))
+                throw new CancellationException("Stopped");
+            digest.update(le32(i));
+            h = digest.digest(h);
+        }
 
         // Verify the password.
         byte[] verInput = aesCbcDecrypt(deriveKey(h, BK_VERIFIER_INPUT, keyBytes),
-                fit(pSalt, blockSize), encVerInput);
+                pSalt, encVerInput);
         byte[] verValue = aesCbcDecrypt(deriveKey(h, BK_VERIFIER_VALUE, keyBytes),
-                fit(pSalt, blockSize), encVerValue);
+                pSalt, encVerValue);
         byte[] expect = sha512(verInput);
-        boolean ok = true;
-        for (int i = 0; i < hashSize && i < expect.length && i < verValue.length; i++) {
-            if (expect[i] != verValue[i]) { ok = false; break; }
-        }
+        boolean ok = MessageDigest.isEqual(expect, verValue);
         if (!ok) return new Result(false, null);
 
         // Recover the real package key.
         byte[] secretKey = aesCbcDecrypt(deriveKey(h, BK_KEY_VALUE, keyBytes),
-                fit(pSalt, blockSize), encKeyValue);
+                pSalt, encKeyValue);
         secretKey = java.util.Arrays.copyOf(secretKey, keyBytes);
 
         // Decrypt the package in 4096-byte segments.
-        int kdBlockSize = Integer.parseInt(attr(keyData, "blockSize"));
-        byte[] kdSalt = b64(attr(keyData, "saltValue"));
+        int kdBlockSize = 16;
         byte[] pkg = cfbf.read("EncryptedPackage");
+        if (pkg.length < 8 || (pkg.length - 8) % 16 != 0)
+            throw new IllegalArgumentException("Truncated encrypted package.");
         long total = (pkg[0] & 0xffL) | ((pkg[1] & 0xffL) << 8) | ((pkg[2] & 0xffL) << 16)
                 | ((pkg[3] & 0xffL) << 24) | ((pkg[4] & 0xffL) << 32) | ((pkg[5] & 0xffL) << 40)
                 | ((pkg[6] & 0xffL) << 48) | ((pkg[7] & 0xffL) << 56);
+        if (total < 4 || total > pkg.length - 8 || pkg.length - 8 - total > 15)
+            throw new IllegalArgumentException("Invalid decrypted package size.");
         int seg = 4096;
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         int pos = 8;
         int index = 0;
         while (pos < pkg.length) {
+            if (cancelled.getAsBoolean()) throw new CancellationException("Stopped");
             int len = Math.min(seg, pkg.length - pos);
             // segment must be a multiple of the block size for CBC
             int blk = (len / kdBlockSize) * kdBlockSize;
@@ -154,6 +200,9 @@ public final class OfficeCrypto {
         if (total >= 0 && total < all.length) {
             all = java.util.Arrays.copyOf(all, (int) total);
         }
+        if (all[0] != 'P' || all[1] != 'K' || all[2] != 3 || all[3] != 4)
+            throw new IllegalArgumentException("Decrypted output is not an Office document.");
         return new Result(true, all);
+        }
     }
 }

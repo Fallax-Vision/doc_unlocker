@@ -22,6 +22,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -35,9 +38,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.Role
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.isActive
+import com.fallaxvision.docunlocker.engine.OfficeCrypto
+import com.fallaxvision.docunlocker.engine.DocumentInput
 import java.io.File
 
 private val Blue = Color(0xFF3B82F6)
@@ -67,7 +75,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("doc_unlocker", Context.MODE_PRIVATE)
         setContent {
-            var themeMode by remember { mutableIntStateOf(prefs.getInt("theme", 0)) }
+            var themeMode by remember { mutableIntStateOf(prefs.getInt("theme", 0).coerceIn(0, 2)) }
             var keepAwake by remember { mutableStateOf(prefs.getBoolean("keepAwake", true)) }
             var vibrate by remember { mutableStateOf(prefs.getBoolean("vibrate", true)) }
             fun save() = prefs.edit()
@@ -102,18 +110,42 @@ class MainActivity : ComponentActivity() {
         var knownPw by remember { mutableStateOf("") }
         var maxDigits by remember { mutableStateOf(6) }
         var running by remember { mutableStateOf(false) }
+        var loading by remember { mutableStateOf(false) }
         var progress by remember { mutableStateOf(0f) }
         var status by remember { mutableStateOf("Idle") }
         var tries by remember { mutableStateOf(0L) }
         var showSettings by remember { mutableStateOf(false) }
         var warnKind by remember { mutableStateOf<String?>(null) }   // "office"/"pdf"/"unsupported"
+        val busy = running || loading
+        DisposableEffect(Unit) {
+            onDispose { stopFlag = true; keepScreenOn(false) }
+        }
+        LaunchedEffect(running, keepAwake) { keepScreenOn(running && keepAwake) }
 
         val picker = rememberLauncherForActivityResult(
             ActivityResultContracts.OpenDocument()
         ) { uri: Uri? ->
-            if (uri != null) {
-                fileName = queryName(uri)
-                fileBytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            if (uri != null && !busy) {
+                loading = true; fileBytes = null; fileName = ""; status = "Reading document..."
+                stopFlag = false
+                scope.launch {
+                    try {
+                        val imported = withContext(Dispatchers.IO) {
+                            val job = coroutineContext
+                            val name = queryName(uri)
+                            val bytes = contentResolver.openInputStream(uri)?.use {
+                                DocumentInput.read(it) { stopFlag || !job.isActive }
+                            } ?: error("This document could not be opened.")
+                            name to bytes
+                        }
+                        fileName = imported.first; fileBytes = imported.second
+                        progress = 0f; tries = 0; status = "Ready"
+                    } catch (e: CancellationException) {
+                        status = "Stopped."; throw e
+                    } catch (e: Exception) {
+                        status = "Could not read document: ${e.message}"
+                    } finally { loading = false }
+                }
             }
         }
 
@@ -123,53 +155,75 @@ class MainActivity : ComponentActivity() {
             if (vibrate) doVibrate()
         }
 
-        fun beginCrack(force: Boolean) {
+        fun beginCrack() {
             val data = fileBytes ?: return
+            if (busy) return
+            val password = knownPw
+            val digits = maxDigits
+            val name = fileName
             stopFlag = false; running = true; progress = 0f; tries = 0
             status = "Reading..."
             keepScreenOn(keepAwake)
             scope.launch {
+                try {
                 val res = withContext(Dispatchers.Default) {
-                    if (knownPw.isNotEmpty() && Cracker.unlock(data, knownPw) != null)
-                        return@withContext "ok:$knownPw"
-                    val total = Cracker.estimate(maxDigits).coerceAtLeast(1)
+                    val job = coroutineContext
+                    val prepared = OfficeCrypto.prepare(data)
+                    fun unlock(candidate: String) = prepared.decrypt(candidate) {
+                        stopFlag || !job.isActive
+                    }
+                    if (password.isNotEmpty()) {
+                        val result = unlock(password)
+                        return@withContext if (result.ok) password to result.plaintext else null
+                    }
+                    val total = Cracker.estimate(digits).coerceAtLeast(1)
                     var n = 0L
-                    for (cand in Cracker.candidates(maxDigits)) {
-                        if (stopFlag) return@withContext "stopped"
+                    var lastUpdate = 0L
+                    for (cand in Cracker.candidates(digits)) {
+                        if (stopFlag || !job.isActive) throw CancellationException("Stopped")
                         n++
-                        if (n % 25L == 0L) {
-                            tries = n; progress = (n.toFloat() / total).coerceIn(0f, 1f)
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        if (now - lastUpdate >= 200) {
+                            lastUpdate = now
+                            withContext(Dispatchers.Main) {
+                                tries = n; progress = (n.toFloat() / total).coerceIn(0f, 0.99f)
+                            }
                         }
-                        if (Cracker.test(data, cand)) return@withContext "ok:$cand"
+                        val result = unlock(cand)
+                        if (result.ok) {
+                            withContext(Dispatchers.Main) { tries = n }
+                            return@withContext cand to result.plaintext
+                        }
                     }
-                    "nofound"
+                    null
                 }
-                when {
-                    res == "stopped" -> finishRun("Stopped.")
-                    res == "nofound" -> finishRun("Not found. Try a longer PIN length.")
-                    res.startsWith("ok:") -> {
-                        val pw = res.removePrefix("ok:")
-                        val plain = withContext(Dispatchers.Default) { Cracker.unlock(data, pw) }
-                        if (plain != null) {
-                            progress = 1f
-                            val out = "Unlocked_" + fileName.ifBlank { "document" }
-                            val where = saveToDownloads(out, plain)
-                            finishRun("Found: $pw\nSaved: $where")
-                        } else finishRun("Not found.")
-                    }
-                    else -> finishRun("Error.")
+                if (res == null) {
+                    finishRun(if (password.isNotEmpty()) "That password did not work."
+                              else "Not found. Try a longer PIN length.")
+                } else {
+                    if (stopFlag) throw CancellationException("Stopped")
+                    status = "Saving unlocked copy..."
+                    val where = withContext(Dispatchers.IO) { saveToDownloads("Unlocked_$name", res.second) }
+                    progress = 1f; knownPw = ""
+                    finishRun("Password: ${res.first}\nSaved: $where")
                 }
+                } catch (e: CancellationException) {
+                    status = "Stopped."
+                } catch (e: Exception) {
+                    status = "Unable to unlock: ${e.message}"
+                } finally { running = false; keepScreenOn(false) }
             }
         }
 
         fun onStart() {
+            if (busy) return
             val data = fileBytes
             if (data == null) { status = "Pick a document first."; return }
             val lower = fileName.lowercase()
             val office = OFFICE_EXTS.any { lower.endsWith(it) }
             if (!office) { warnKind = if (lower.endsWith(".pdf")) "pdf" else "unsupported"; return }
-            if (!Cracker.isEncrypted(data)) { warnKind = "office"; return }
-            beginCrack(false)
+            // Container validation happens once in the recovery worker.
+            beginCrack()
         }
 
         // ---- dialogs ----
@@ -180,9 +234,9 @@ class MainActivity : ComponentActivity() {
         warnKind?.let { kind ->
             val msg = when (kind) {
                 "pdf" -> "PDFs aren't supported on Android yet — use the desktop app. " +
-                    "(To check it, open the PDF in Acrobat Reader or your browser.) Continue anyway?"
+                    "Open the PDF in Acrobat Reader or your browser to check its protection."
                 "unsupported" -> "Unsupported file type. The Android app handles Word, Excel and " +
-                    "PowerPoint. Open it in an app built for that format first. Continue anyway?"
+                    "PowerPoint. Choose a supported Office document."
                 else -> "This file doesn't look encrypted. Try opening it first in Word / Excel / " +
                     "PowerPoint, Google Docs, or WPS Office — it may open with no password. " +
                     "Continue anyway?"
@@ -192,19 +246,16 @@ class MainActivity : ComponentActivity() {
                 title = { Text("Heads up") },
                 text = { Text(msg, fontSize = 14.sp) },
                 confirmButton = {
-                    TextButton(onClick = { warnKind = null; beginCrack(true) }) {
-                        Text("Continue anyway", color = MaterialTheme.colorScheme.error)
+                    TextButton(onClick = { warnKind = null }) {
+                        Text("OK")
                     }
                 },
-                dismissButton = {
-                    TextButton(onClick = { warnKind = null }) { Text("Cancel") }
-                }
             )
         }
 
         val scroll = rememberScrollState()
         Column(
-            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)
+            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars).imePadding()
                 .verticalScroll(scroll).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
@@ -225,12 +276,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            Card(shape = MaterialTheme.shapes.large) {
+            Card(modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Locked document", fontWeight = FontWeight.SemiBold)
                     Text(if (fileName.isBlank()) "No file selected" else fileName,
                         color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                    Button(
+                    OutlinedButton(
                         onClick = {
                             picker.launch(arrayOf(
                                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -238,44 +289,46 @@ class MainActivity : ComponentActivity() {
                                 "application/vnd.openxmlformats-officedocument.presentationml.presentation",
                                 "application/octet-stream", "application/*", "*/*"))
                         },
-                        enabled = !running, shape = MaterialTheme.shapes.large
+                        enabled = !busy, shape = MaterialTheme.shapes.large,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                     ) { Text("📁  Choose document") }
                 }
             }
 
-            Card(shape = MaterialTheme.shapes.large) {
+            Card(modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Options", fontWeight = FontWeight.SemiBold)
                     OutlinedTextField(
-                        value = knownPw, onValueChange = { knownPw = it },
+                        value = knownPw, onValueChange = { if (it.length <= 1024) knownPw = it },
                         label = { Text("Known password (optional)") },
-                        singleLine = true, enabled = !running,
+                        singleLine = true, enabled = !busy,
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large
                     )
                     Text("Try numeric PINs up to: $maxDigits digits", fontSize = 13.sp)
                     Slider(
                         value = maxDigits.toFloat(), onValueChange = { maxDigits = it.toInt() },
-                        valueRange = 1f..8f, steps = 6, enabled = !running
+                        valueRange = 1f..8f, steps = 6, enabled = !busy && knownPw.isEmpty()
                     )
                 }
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(
-                    onClick = { onStart() }, enabled = !running,
-                    modifier = Modifier.weight(1f).height(50.dp), shape = MaterialTheme.shapes.large
-                ) { Text("▶  Start Unlocking", fontWeight = FontWeight.Bold) }
+                    onClick = { onStart() }, enabled = !busy && fileBytes != null,
+                    modifier = Modifier.weight(1f).heightIn(min = 50.dp), shape = MaterialTheme.shapes.large
+                ) { Text(if (knownPw.isNotEmpty()) "Unlock document" else "Start Unlocking", fontWeight = FontWeight.Bold) }
                 OutlinedButton(
-                    onClick = { stopFlag = true }, enabled = running,
-                    modifier = Modifier.height(50.dp), shape = MaterialTheme.shapes.large
+                    onClick = { stopFlag = true; status = "Stopping..." }, enabled = busy,
+                    modifier = Modifier.heightIn(min = 50.dp), shape = MaterialTheme.shapes.large
                 ) { Text("■ Stop") }
             }
 
-            Card(shape = MaterialTheme.shapes.large) {
+            Card(modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Progress & Status", fontWeight = FontWeight.SemiBold)
-                    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                    if (loading) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    else LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
                     Text(status, fontSize = 13.sp)
                     if (running || tries > 0)
                         Text("Tries: $tries", fontSize = 12.sp,
@@ -303,27 +356,35 @@ class MainActivity : ComponentActivity() {
             title = { Text("Settings") },
             text = {
                 Column(
-                    Modifier.verticalScroll(rememberScrollState()),
+                    Modifier.verticalScroll(rememberScrollState()).selectableGroup(),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Text("Theme", fontWeight = FontWeight.SemiBold)
                     listOf("System", "Light", "Dark").forEachIndexed { i, label ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = themeMode == i, onClick = { onThemeChange(i) })
+                        Row(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                            .selectable(selected = themeMode == i, role = Role.RadioButton,
+                                onClick = { onThemeChange(i) }),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = themeMode == i, onClick = null)
+                            Spacer(Modifier.width(12.dp))
                             Text(label)
                         }
                     }
                     Spacer(Modifier.height(6.dp))
                     Text("Behaviour", fontWeight = FontWeight.SemiBold)
                     Row(verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()) {
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                            .toggleable(value = keepAwake, role = Role.Switch, onValueChange = onKeepAwakeChange)) {
                         Text("Keep screen on while scanning", Modifier.weight(1f), fontSize = 14.sp)
-                        Switch(checked = keepAwake, onCheckedChange = onKeepAwakeChange)
+                        Spacer(Modifier.width(12.dp))
+                        Switch(checked = keepAwake, onCheckedChange = null)
                     }
                     Row(verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()) {
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                            .toggleable(value = vibrate, role = Role.Switch, onValueChange = onVibrateChange)) {
                         Text("Vibrate when a run finishes", Modifier.weight(1f), fontSize = 14.sp)
-                        Switch(checked = vibrate, onCheckedChange = onVibrateChange)
+                        Spacer(Modifier.width(12.dp))
+                        Switch(checked = vibrate, onCheckedChange = null)
                     }
                     Spacer(Modifier.height(8.dp))
                     Text("About", fontWeight = FontWeight.SemiBold)
@@ -359,25 +420,37 @@ class MainActivity : ComponentActivity() {
             val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
             if (idx >= 0 && c.moveToFirst()) name = c.getString(idx)
         }
-        return name
+        return name.substringAfterLast('/').substringAfterLast('\\')
+            .replace(Regex("[\\p{Cntrl}:*?\"<>|]"), "_").take(180).ifBlank { "document" }
     }
 
     private fun saveToDownloads(name: String, bytes: ByteArray): String {
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val values = ContentValues().apply {
                     put(MediaStore.Downloads.DISPLAY_NAME, name)
                     put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                    put(MediaStore.Downloads.IS_PENDING, 1)
                 }
                 val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                contentResolver.openOutputStream(uri!!)!!.use { it.write(bytes) }
-                "Downloads/$name"
+                    ?: error("Downloads is unavailable.")
+                try {
+                    contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+                        ?: error("Could not write the unlocked copy.")
+                    contentResolver.update(uri, ContentValues().apply {
+                        put(MediaStore.Downloads.IS_PENDING, 0)
+                    }, null, null)
+                    "Downloads/$name"
+                } catch (e: Exception) {
+                    contentResolver.delete(uri, null, null)
+                    throw e
+                }
             } else {
                 val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-                val f = File(dir, name); f.writeBytes(bytes); f.absolutePath
+                    ?: error("Downloads is unavailable.")
+                dir.mkdirs()
+                val f = File.createTempFile(name.substringBeforeLast('.').take(100) + "_", "." + name.substringAfterLast('.', "bin"), dir)
+                try { f.writeBytes(bytes); f.absolutePath }
+                catch (e: Exception) { f.delete(); throw e }
             }
-        } catch (e: Exception) {
-            val f = File(getExternalFilesDir(null), name); f.writeBytes(bytes); f.absolutePath
-        }
     }
 }

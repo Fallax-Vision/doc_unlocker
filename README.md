@@ -7,7 +7,7 @@
 **Recover the password of a Microsoft Office or PDF document _you own_ - with a friendly GUI, smart guessing, and optional GPU acceleration.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.4-success.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.5-success.svg)](CHANGELOG.md)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-informational.svg)](#installation)
 [![Python](https://img.shields.io/badge/python-3.10%2B-yellow.svg)](https://www.python.org/)
 
@@ -70,7 +70,7 @@ your GPU:
 - **Settings panel** (gear icon): theme, rounded/sharp corners, launch
   maximised, finish notifications + sound, and a "Check for updates" button.
 - Live **tries counter**, **speed**, and **estimated time remaining**.
-- **Resume**: tried passwords are remembered per file and skipped next time.
+- **Resume**: the last 50,000 attempts are remembered as hashes per file and skipped next time.
 - **Unlock with known password** if you already have it.
 
 ---
@@ -93,7 +93,9 @@ both light and dark themes.
 2. Download the latest asset for your platform:
    - **Windows:** `DocUnlocker-vX.Y.Z.exe` (double-click; no Python needed).
    - **Android:** `DocUnlocker-vX.Y.Z.apk` (enable "install unknown apps", then
-     open the APK). Barebone build - Office files only for now.
+   open the APK). Android supports Office agile AES-256/SHA-512 files up to 16 MiB.
+   Version 1.0.5 introduces stable release signing; older debug-signed installations
+   may require uninstalling the old app first. Keep your downloaded documents.
 
 ### Option B - Run from source (Windows)
 
@@ -121,7 +123,8 @@ are missing.
 3. Click **Start Unlocking** for the CPU attack, or
    **Get Hashcat** then **Test GPU** then **Run Hashcat now** for the fast GPU path.
 4. When the password is found, an **`Unlocked_<yourfile>`** copy appears in the
-   same folder, and the password is written to `DocUnlocker_found.log`.
+   same folder. Existing copies are preserved with numbered names. The password is
+   shown in the result; `DocUnlocker_found.log` contains only operational details.
 
 ---
 
@@ -129,8 +132,8 @@ are missing.
 
 - For Office files: reads the document's `EncryptionInfo` and builds a
   Hashcat-compatible `$office$*2013*...` hash **natively** in Python (`olefile`).
-- Verifies a candidate by **actually decrypting** the file and checking the
-  output is a valid document - so it never reports a false success.
+- Verifies a candidate by decrypting the file and checking its document signature.
+  This is a format sanity check, not a complete Office-content validation.
 - Uses [`msoffcrypto-tool`](https://github.com/nolze/msoffcrypto-tool) for Office
   decryption, [`pypdf`](https://github.com/py-pdf/pypdf) for PDFs, and
   [Hashcat](https://hashcat.net) for GPU cracking of Office files.
@@ -142,7 +145,7 @@ are missing.
 ```bash
 py -m pip install --user pyinstaller
 py build_exe.py
-# -> dist/DocUnlocker.exe
+# -> dist/DocUnlocker-v1.0.5.exe
 ```
 
 The `.exe` is intentionally **git-ignored**; it is distributed as a
@@ -174,7 +177,29 @@ improvements. See [CONTRIBUTING.md](CONTRIBUTING.md).
 - [ ] In-app screenshots
 - [ ] Drag-and-drop a file onto the window
 - [ ] Optional CUDA backend hint / device picker
-- [ ] Auto-update check against the GitHub Releases API
+- [x] Update check against the GitHub Releases API
+
+## Limits, testing and storage
+
+Desktop documents are limited to 64 MiB, Android documents to 16 MiB, and custom
+wordlists/GPU exports to 32 MiB. Office key derivation is limited to 1,000,000
+iterations per attempt. Long-running work stays off the interface thread.
+
+Run `python -m pytest -q` for desktop regressions. Android engine checks are in
+`android/_jvmtest/SecurityTests.java`; the release workflow generates a test fixture,
+runs these checks, runs Android lint, and builds the signed APK.
+
+Logs rotate at 1 MiB with at most two old logs. Legacy log passwords are removed
+when those app-owned logs are next used; legacy resume attempts are hashed on the
+next save. No database or server migrations exist in this project.
+
+Preview cleanup with `python maintenance.py`; use `--apply` after copying verified
+builds to `dist/`. It retains the current version plus two previous versions per
+platform and removes reproducible build intermediates. User documents and unlocked
+copies are excluded. `python github_retention.py` previews the equivalent release
+binary and CI-run cleanup; the release workflow applies it after successful publication.
+Git history is preserved, CI uses shallow checkouts, and temporary CI artifacts expire
+after seven days. See [release setup](GITHUB_SETUP.md) for signing configuration.
 
 ---
 

@@ -4,6 +4,14 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.6] - 2026-09-05
+
+### Fixed
+
+- Improve small desktop status text contrast in both themes using the existing
+  readable accent colours. Android version metadata matches this final release.
+- Remove reproducible PyInstaller specification files during local build cleanup.
+
 ## [1.0.5] - 2026-09-05
 
 ### Changed

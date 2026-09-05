@@ -11,6 +11,10 @@ VERSION_FILE = re.compile(r"DocUnlocker-v(\d+)\.(\d+)\.(\d+)\.(exe|apk)$")
 def cleanup_candidates(root=ROOT):
     root = Path(root).resolve()
     dist = root / "dist"
+    # PyInstaller regenerates these; do not accumulate one per release.
+    for path in root.glob("*.spec"):
+        if re.fullmatch(r"(?:Doc|Word)Unlocker(?:-v\d+\.\d+\.\d+)?\.spec", path.name):
+            yield path
     for suffix in ("exe", "apk"):
         versions = []
         for path in dist.glob(f"DocUnlocker-v*.{suffix}"):

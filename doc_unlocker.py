@@ -19,7 +19,7 @@ legacy and macro-enabled variants) and PDF documents.
 
 from __future__ import annotations
 
-__version__ = "1.0.5"
+__version__ = "1.0.6"
 __app_name__ = "Doc Unlocker"
 
 import io
@@ -1267,7 +1267,7 @@ class App:
         self._round.append(row)
 
         self.status = ctk.CTkLabel(card, text="Status: Idle",
-                                   text_color=BLUE, anchor="w",
+                                   text_color=("#0f56a6", "#7ab8ff"), anchor="w",
                                    font=ctk.CTkFont(family="Segoe UI", size=12))
         self.status.pack(fill="x", padx=16, pady=(0, 4), before=row)
         self.status.bind("<Configure>", lambda e: self.status.configure(wraplength=max(100, e.width - 12)))

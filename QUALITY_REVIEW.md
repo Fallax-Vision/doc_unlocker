@@ -1,4 +1,4 @@
-# Version 1.0.5 quality review
+# Version 1.0.6 quality review
 
 ## Overall UX score
 
@@ -13,6 +13,7 @@ Android source/layout review used the UX psychology checklist.
 | Tiny password popup and dense settings | Larger themed password dialog, scrollable settings, fixed Done action |
 | Small Android setting targets | Full-row radio/switch targets, minimum 48dp touch size, aligned labels |
 | Long status messages crowded metrics | Full-width desktop status above aligned counters |
+| Dark status text was difficult to read | Existing readable accent colours provide over 8:1 dark text contrast |
 | Slow work froze actions or left stale state | Background work, input snapshots, single-job guard, explicit failure/finally paths |
 
 ## Priority changes and implementation
@@ -52,7 +53,7 @@ measurement includes the owning task context rather than isolated audit effort.
 - `gradlew lintRelease testReleaseUnitTest assembleRelease`: successful. Lint has
   zero errors and nine advisory warnings. Gradle unit-test task has no additional
   test sources; the executable JVM suite above supplies engine regression coverage.
-- APK signature and manifest checked: version 1.0.5 / code 10005, stable RSA release
+- APK signature and manifest checked: version 1.0.6 / code 10006, stable RSA release
   certificate, no debuggable flag. Private key and passwords remain outside Git.
 - Windows executable built with PyInstaller; packaged GUI startup and PDF recovery
   passed after correcting frozen worker initialization. The decrypted PDF was read
